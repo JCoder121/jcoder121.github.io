@@ -55,9 +55,18 @@
   .cmd .tgt{color:var(--accent)}
 
   @media (max-width:560px){ body{font-size:12.5px} a.proj .desc,.comment .opt{display:none} }
+
+  /* ---- boot splash: a shell types `vim .projects`, then a CRT power-on into the buffer ---- */
+  #splash{position:fixed;inset:0;z-index:50;background:var(--bg);color:var(--fg);
+    padding:14px 16px;overflow:hidden;text-shadow:0 0 1px rgba(255,255,255,.12)}
+  #splash pre{margin:0;white-space:pre-wrap;font:inherit}
+  #splash .bcur{display:inline-block;width:1ch;background:var(--fg);animation:scblink 1.05s steps(1) infinite}
+  @keyframes scblink{50%{background:transparent}}
 </style>
+<noscript><style>#splash{display:none!important}</style></noscript>
 </head>
 <body>
+<div id="splash"><pre id="sh"></pre></div>
 <div class="screen">
   <div class="buf" id="buf">
     <div class="line comment">" ~/.projects</div>
@@ -192,6 +201,56 @@
   fillTildes();
   if(N) setActive(0,false);
   baseCmd();            // show the hint until the user interacts
+})();
+</script>
+
+<script>
+/* ---- boot splash: `$ vim .projects` → smooth cross-dissolve into the buffer. ~2s, every visit, no skip. ---- */
+(function(){
+  var splash = document.getElementById('splash');
+  var sh = document.getElementById('sh');
+  if(!splash || !sh) return;
+  var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var out = '';
+
+  function paint(cursor){
+    sh.innerHTML = out.replace(/&/g,'&amp;').replace(/</g,'&lt;') + (cursor ? '<span class="bcur"> </span>' : '');
+  }
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+  function put(s){ out += s; paint(true); }
+  async function type(s){
+    for(var i=0;i<s.length;i++){ out += s[i]; paint(true); await sleep(reduce?0:(22 + Math.random()*12)); }
+  }
+
+  async function run(){
+    put('Last login: Sat Jul 19 21:40:12 on ttys001\n');
+    await sleep(reduce?0:100);
+    put('jeffrey@jcoder ~ % ');
+    await type('ls -a | grep projects'); put('\n');
+    await sleep(reduce?0:80);
+    put('.projects\n');
+    await sleep(reduce?0:140);
+    put('jeffrey@jcoder ~ % ');
+    await type('vim .projects');
+    await sleep(reduce?0:160);
+    paint(false);                 // drop the cursor, as if <Enter>
+    await boot();
+    if(splash.parentNode) splash.remove();
+    window.dispatchEvent(new Event('resize'));   // re-measure the buffer now that it's visible
+  }
+
+  // smooth cross-dissolve: the shell text fades out (lifting a touch) as the buffer resolves in
+  async function boot(){
+    if(reduce){ splash.style.display='none'; return; }
+    await splash.animate(
+      [{opacity:1, transform:'translateY(0)'},
+       {opacity:0, transform:'translateY(-6px)'}],
+      {duration:360, easing:'ease', fill:'forwards'}
+    ).finished;
+    splash.style.display='none';
+  }
+
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', run); else run();
 })();
 </script>
 </body>
