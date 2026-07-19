@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>~/.projects — jeffrey chen</title>
+<meta name="description" content="Jeffrey Chen's web projects, listed in a vi buffer. Click a name or type its number to open.">
+<style>
+  :root{
+    --bg:#0b0b0b; --fg:#d6d6d6; --dim:#6a6a6a; --faint:#3a3a3a;
+    --hi-bg:#d6d6d6; --hi-fg:#0b0b0b; --accent:#ffffff;
+    --gutw:2ch; --namew:17ch;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    background:var(--bg);color:var(--fg);
+    font-family:"SF Mono",ui-monospace,"DejaVu Sans Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    font-size:15px;line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    text-shadow:0 0 1px rgba(255,255,255,.12);
+    overflow:hidden;
+  }
+  body::after{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:20;opacity:.5;
+    background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 2px,rgba(0,0,0,.25) 2px 3px);
+    mix-blend-mode:multiply;
+  }
+  .screen{display:flex;flex-direction:column;height:100vh;padding:14px 0 0}
+
+  .buf{flex:1 1 auto;overflow-y:auto;padding:0 16px;scrollbar-width:none}
+  .buf::-webkit-scrollbar{display:none}
+  .line{white-space:pre;overflow:hidden;height:1.6em}
+  .comment{color:var(--dim)}
+  .tilde{color:var(--faint)}
+
+  a.proj{display:block;color:var(--fg);text-decoration:none;white-space:pre;height:1.6em;overflow:hidden;outline:none;cursor:pointer}
+  a.proj .gutter{display:inline-block;width:var(--gutw);text-align:right;padding-right:1ch;color:var(--dim)}
+  a.proj .cur{display:inline-block;width:1ch}
+  a.proj .name{display:inline-block;width:var(--namew)}
+  a.proj .dots{color:var(--faint)}
+  a.proj .desc{color:var(--dim)}
+  /* cursorline (active / hover / focus): inverted like a vi selection */
+  a.proj.active{background:var(--hi-bg);color:var(--hi-fg)}
+  a.proj.active .gutter,a.proj.active .dots,a.proj.active .desc{color:var(--hi-fg)}
+  a.proj.active .name{color:var(--hi-fg);font-weight:600}
+  /* blinking block cursor before the active line's name */
+  a.proj.active .cur{background:var(--hi-fg);animation:blink 1.05s steps(1) infinite}
+  @keyframes blink{50%{background:transparent}}
+  @media (prefers-reduced-motion:reduce){a.proj.active .cur{animation:none}}
+
+  .status{flex:0 0 auto;background:var(--hi-bg);color:var(--hi-fg);
+    display:flex;justify-content:space-between;padding:1px 10px;font-weight:600;text-shadow:none;white-space:pre}
+  .cmd{flex:0 0 auto;height:1.7em;padding:0 12px;color:var(--fg);white-space:pre;overflow:hidden}
+  .cmd .tgt{color:var(--accent)}
+
+  @media (max-width:560px){ body{font-size:12.5px} a.proj .desc,.comment .opt{display:none} }
+</style>
+</head>
+<body>
+<div class="screen">
+  <div class="buf" id="buf">
+    <div class="line comment">" ~/.projects</div>
+    <div class="line comment">" jeffrey chen — things i've built.<span class="opt">  click a name, or type a number, then ⏎</span></div>
+    <div class="line">&nbsp;</div>
+
+    <!-- Add a project = add one <a> line below. Ordinals, gutter width, name column,
+         and the hints all auto-compute from the list; nothing else to touch. Newest first. -->
+    <a class="proj" href="https://jcoder121.github.io/chirp/"><span class="gutter"></span><span class="cur"> </span><span class="name">chirp</span><span class="dots"> ...... </span><span class="desc">local, private dictation for macOS</span></a>
+    <a class="proj" href="https://jcoder121.github.io/ascii-visualizer/"><span class="gutter"></span><span class="cur"> </span><span class="name">ascii-visualizer</span><span class="dots"> ...... </span><span class="desc">sound rendered as ascii</span></a>
+    <a class="proj" href="https://jcoder121.github.io/craps/"><span class="gutter"></span><span class="cur"> </span><span class="name">craps</span><span class="dots"> ...... </span><span class="desc">a live craps table</span></a>
+    <a class="proj" href="https://jcoder121.github.io/twenty_four/"><span class="gutter"></span><span class="cur"> </span><span class="name">twenty-four</span><span class="dots"> ...... </span><span class="desc">a 24-game solver &amp; web terminal</span></a>
+    <a class="proj" href="https://jcoder121.github.io/low-poly-worlds/"><span class="gutter"></span><span class="cur"> </span><span class="name">low-poly-worlds</span><span class="dots"> ...... </span><span class="desc">wander miniature 3d worlds</span></a>
+
+    <div class="line">&nbsp;</div>
+    <div id="tildes"></div>
+  </div>
+
+  <div class="status">
+    <span id="st-left">~/.projects</span>
+    <span id="st-right">NORMAL  utf-8  1,1  All</span>
+  </div>
+  <div class="cmd" id="cmd"></div>
+</div>
+
+<script>
+(function(){
+  var buf    = document.getElementById('buf');
+  var cmd    = document.getElementById('cmd');
+  var stRight= document.getElementById('st-right');
+  var projs  = Array.prototype.slice.call(document.querySelectorAll('a.proj'));
+  var lines  = Array.prototype.slice.call(document.querySelectorAll('#buf .line, #buf a.proj'));
+  var N      = projs.length;
+  var idx=0, pending='', pTimer=null, lastKey='';
+  var LH = 1.6 * parseFloat(getComputedStyle(document.body).fontSize);
+
+  // ---- data-driven layout: numbering + column widths (scales to any N) ----
+  lines.forEach(function(el,i){ el.dataset.row = i+1; });
+  var maxName = 0;
+  projs.forEach(function(p,i){
+    p.querySelector('.gutter').textContent = (i+1);
+    maxName = Math.max(maxName, p.querySelector('.name').textContent.length);
+  });
+  var root = document.documentElement.style;
+  root.setProperty('--gutw', (String(N).length) + 'ch');
+  root.setProperty('--namew', (maxName + 1) + 'ch');
+
+  function baseCmd(){
+    cmd.innerHTML = N ? ('type <b>1–'+N+'</b> or <b>j</b>/<b>k</b> then <b>⏎</b> — or click — to open a project')
+                      : '" no projects"';
+  }
+  function target(p){ return p.getAttribute('href').replace(/^https?:\/\//,'').replace(/\/$/,''); }
+
+  function pos(){
+    if(buf.scrollHeight <= buf.clientHeight + 1) return 'All';
+    if(buf.scrollTop <= 0) return 'Top';
+    if(buf.scrollTop + buf.clientHeight >= buf.scrollHeight - 1) return 'Bot';
+    return Math.round(buf.scrollTop / (buf.scrollHeight - buf.clientHeight) * 100) + '%';
+  }
+  function status(){
+    var row = N ? projs[idx].dataset.row : 1;
+    stRight.textContent = 'NORMAL  utf-8  ' + row + ',1  ' + pos();
+  }
+
+  function setActive(i, scroll){
+    if(!N) return;
+    projs[idx] && projs[idx].classList.remove('active');
+    idx = Math.max(0, Math.min(N-1, i));
+    var p = projs[idx];
+    p.classList.add('active');
+    if(scroll) p.scrollIntoView({block:'nearest'});
+    cmd.innerHTML = ':e <span class="tgt">' + target(p) + '</span>';
+    status();
+  }
+  function open(i){ if(projs[i]) window.location.href = projs[i].getAttribute('href'); }
+
+  // ---- multi-digit "open project N" (scales past 9) ----
+  function couldExtend(pfx){
+    for(var n=1;n<=N;n++){ var s=''+n; if(s.length>pfx.length && s.slice(0,pfx.length)===pfx) return true; }
+    return false;
+  }
+  function resolvePending(){
+    clearTimeout(pTimer); pTimer=null;
+    if(!pending) return;
+    var n = parseInt(pending,10), pv = pending; pending='';
+    if(n>=1 && n<=N){ open(n-1); }
+    else { cmd.textContent = 'E486: no project '+pv; setTimeout(baseCmd, 1300); }
+  }
+
+  document.addEventListener('keydown', function(e){
+    var k = e.key;
+    if(/^[0-9]$/.test(k)){
+      pending += k;
+      cmd.innerHTML = 'open → <span class="tgt">'+pending+'</span>';
+      clearTimeout(pTimer);
+      if(couldExtend(pending)) pTimer = setTimeout(resolvePending, 700);
+      else resolvePending();
+      lastKey=k; e.preventDefault(); return;
+    }
+    if(k==='j' || k==='ArrowDown'){ pending=''; setActive(idx+1,true); }
+    else if(k==='k' || k==='ArrowUp'){ pending=''; setActive(idx-1,true); }
+    else if(k==='G'){ pending=''; setActive(N-1,true); }
+    else if(k==='g'){ if(lastKey==='g'){ setActive(0,true); } }
+    else if(k==='Enter'){ if(pending) resolvePending(); else open(idx); }
+    else if(k==='l' || k===' '){ open(idx); }
+    else if(k==='Escape'){ pending=''; baseCmd(); }
+    else { lastKey=k; return; }
+    lastKey=k; e.preventDefault();
+  });
+
+  projs.forEach(function(p,i){
+    p.addEventListener('mouseenter', function(){ setActive(i,false); });
+    p.addEventListener('focus', function(){ setActive(i,false); });
+  });
+
+  // ---- fill leftover rows with tildes (only when content is shorter than the buffer) ----
+  function fillTildes(){
+    var host = document.getElementById('tildes');
+    host.innerHTML = '';
+    var used = 0;
+    Array.prototype.forEach.call(buf.children, function(c){ if(c.id!=='tildes') used += c.getBoundingClientRect().height; });
+    var n = Math.max(0, Math.floor((buf.clientHeight - used) / LH));
+    var s = '';
+    for(var i=0;i<n;i++) s += '<div class="line tilde">~</div>';
+    host.innerHTML = s;
+    status();
+  }
+
+  buf.addEventListener('scroll', status);
+  window.addEventListener('resize', fillTildes);
+
+  fillTildes();
+  if(N) setActive(0,false);
+  baseCmd();            // show the hint until the user interacts
+})();
+</script>
+</body>
+</html>
