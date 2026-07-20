@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Code Nano — a CS61A-style guided project</title>
+<title>Claude Code Nano — build your own Claude Code, a guided project</title>
 <meta name="description" content="Build your own Claude Code: a working ~350-line agent in TypeScript, problem by problem, against a read-only test harness.">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -12,12 +12,12 @@
 <main class="handout">
 
 <h1>Claude Code Nano</h1>
-<p class="lede"><strong>Build your own Claude Code.</strong> A CS61A-style guided project: you implement a working ~350-line agent in TypeScript &mdash; the same core loop the real Claude Code runs &mdash; problem by problem, against a provided read-only test harness. Modeled on <a href="https://cs61a.org/proj/hog/">Hog</a>.</p>
+<p class="lede"><strong>Build your own Claude Code.</strong> A guided project: you implement a working ~350-line agent in TypeScript &mdash; the same core loop the real Claude Code runs &mdash; yourself, problem by problem, against a provided read-only test harness.</p>
 
-<p>There is no planner, no graph, no framework hiding the trick. An agent is <em>a model that can ask for things, plus a harness that runs them and reports back</em>, looped until the model stops asking. Six lectures, one file (<code>index.ts</code>), five sections, ten points. By the end you run your own agent against a real API and watch it find and fix a planted bug in a JavaScript file.</p>
+<p>There is no planner, no graph, no framework hiding the trick. An agent is <em>a model that can ask for things, plus a harness that runs them and reports back</em>, looped until the model stops asking. Six required lectures plus a bonus, one file (<code>index.ts</code>), five sections, ten points. By the end you run your own agent against a real API and watch it find and fix a planted bug in a JavaScript file.</p>
 
 <h2 id="who">Who this is for</h2>
-<p>A programmer who thinks in <strong>data structures &amp; algorithms first</strong> (arrays, queues, invariants, state machines) and <strong>games &amp; simulations second</strong> (turn loops, game state, player moves). Fluent in programming but newer to <strong>TypeScript / Node specifically</strong>: <code>async</code>/<code>await</code>, promises, and Node APIs (<code>fs</code>, <code>child_process</code>, <code>readline</code>) are explained as they appear. Every abstract agent concept is anchored to a DSA idea &mdash; the conversation is an append-only array; the agent loop is a while-loop over a work queue; the edit tool&rsquo;s uniqueness rule is an invariant check.</p>
+<p>A fluent programmer who is newer to <strong>TypeScript / Node specifically</strong>: <code>async</code>/<code>await</code>, promises, and the Node APIs this uses (<code>fs</code>, <code>child_process</code>, <code>readline</code>) are explained as they appear, and TypeScript syntax gets light scaffolding. The lectures are direct technical prose &mdash; they state how the harness works plainly, without analogies.</p>
 
 <h2 id="objectives">What you&rsquo;ll be able to do</h2>
 <ul>
@@ -28,7 +28,7 @@
   <li>Read real Claude Code / agent-harness discussions and know exactly what the harness is doing.</li>
 </ul>
 
-<h2 id="lectures">The six lectures</h2>
+<h2 id="lectures">The lectures</h2>
 <p>The course builds one file in dependency order. Each lecture fills exactly one region of <code>index.ts</code>, using the identifiers already declared in the skeleton. <code>index.ts</code> is the only editable file; <code>tests/</code>, <code>fixtures/</code>, and <code>solution/</code> are read-only harness.</p>
 
 <div class="table-wrap">
@@ -46,8 +46,8 @@
 </table>
 </div>
 
-<h2 id="points">Points (61A-style, 10 + 1 bonus)</h2>
-<p>Self-graded &mdash; points exist for pacing and the 61A homage, not stakes. Each lecture is earned by its <code>./ok NN</code> suite going green plus checking your unlock-question answers against the appendix (spoilers, collapsed by default, on each lecture page). Lectures 01&ndash;06 are the graded 10; the bonus lecture 07 takes you to <strong>11 out of 10</strong>.</p>
+<h2 id="points">Points (10 + 1 bonus)</h2>
+<p>Self-graded &mdash; points exist for pacing, not stakes. Each lecture is earned by its <code>./ok NN</code> suite going green plus checking your unlock-question answers against the appendix (spoilers, collapsed by default, on each lecture page). Lectures 01&ndash;06 are the graded 10; the bonus lecture 07 takes you to <strong>11 out of 10</strong>.</p>
 
 <div class="table-wrap">
 <table>
@@ -59,7 +59,7 @@
 <tr><td>04</td><td>1.5</td><td><code>./ok 04</code> green + unlocks</td></tr>
 <tr><td>05</td><td>2.5</td><td><code>./ok 05</code> green + unlocks (the boss level)</td></tr>
 <tr><td>06</td><td>1</td><td><code>./ok 06</code> green + unlocks; the live fixture-bug run is the payoff</td></tr>
-<tr><td>07 <span class="tag">bonus</span></td><td>+1</td><td><code>./ok 07</code> green + unlocks &mdash; the 61A bonus point (11/10)</td></tr>
+<tr><td>07 <span class="tag">bonus</span></td><td>+1</td><td><code>./ok 07</code> green + unlocks &mdash; the bonus point (11/10)</td></tr>
 <tr><td>Extra</td><td>0</td><td><code>NANO.md</code> / <code>/context</code> viz &mdash; bragging rights only</td></tr>
 </tbody>
 </table>
