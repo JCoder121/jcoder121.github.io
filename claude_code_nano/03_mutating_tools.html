@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools II: Hands (write_file, edit_file, bash) &mdash; Claude Code Nano</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner"><span class="brand"><a href="index.html">Claude Code Nano</a></span><span class="crumbs"><a href="index.html">Home</a> <span class="dot">&middot;</span> <a href="02_read_only_tools.html">&larr; Prev</a> <span class="dot">&middot;</span> <a href="04_the_permission_gate.html">Next &rarr;</a></span></div></nav>
+<main class="handout">
+<h1 id="tools-ii-hands-write_file-edit_file-bash">Tools II: Hands (write_file, edit_file, bash)</h1>
+<h2 id="a-cs61a-style-lecture-for-builders-of-turn-based-simulators-giving-their-agent-hands">A CS61A-Style Lecture for Builders of Turn-Based Simulators, Giving Their Agent Hands</h2>
+<hr>
+<h2 id="lecture-overview">Lecture Overview</h2>
+<p>Lecture 02 gave your agent eyes: <code>read_file</code> and <code>list_files</code> can look at your machine, but nothing they do can change it. No matter how badly the model misreads a file or lists the wrong directory, the worst outcome is a wrong answer — your disk is exactly as it was before the call. That safety net disappears today.</p>
+<p><code>write_file</code>, <code>edit_file</code>, and <code>bash</code> are the three tools that let the model actually change things: create or overwrite files, rewrite a piece of one in place, and run arbitrary shell commands. There is no simulation layer, no sandbox, no dry-run mode — <code>runTool(&quot;bash&quot;, { command: &quot;rm -rf fixtures/&quot; })</code> really deletes <code>fixtures/</code>, on your actual laptop, the instant it runs. You already know from lecture 01 that a <code>tool_use</code> block is inert until the harness chooses to execute it (§1's checkpoint: "nothing happens yet"). Today you write the code that turns that choice into action for the three tools capable of doing real damage — and you'll notice, by the end, that nothing is currently stopping the model from asking for that action. That gap is deliberate, and it's the whole subject of lecture 04.</p>
+<p>The star of today's lecture is <code>edit_file</code>. It looks like a simple find-and-replace, but it embeds an invariant that is the single most important idea in this entire course's tool design: an edit is only safe to perform if you can prove, mechanically, that its target is <em>unique</em>. This is the exact trick the real Claude Code uses, and by the end of §3 you'll understand precisely why "just replace the first match" is not a shortcut — it's a bug waiting to corrupt a file silently.</p>
+<p>Mechanically, today is unsurprising: you're extending the exact same <code>switch (name)</code> dispatch table from lecture 02, adding three more <code>case</code> branches to <code>runTool</code>. Nothing about its signature, its <code>default</code> case, or its errors-throw convention changes — you're not rewriting anything, only adding to it. That's the payoff of building a dispatch table in the first place: <code>read_file</code> and <code>list_files</code> don't know or care that three new cases just showed up next to them.</p>
+<p><strong>How this lecture works:</strong> three numbered problems, 3.1–3.3, each with a spec, a worked example, constraints lifted directly from <code>tests/03_mutating_tools.test.ts</code>, and 2–4 unlock questions whose answers live only in the Appendix. Write real code in <code>index.ts</code> for each before checking its snippet. This lecture is worth <strong>2 of the course's 10 points</strong>, and it's also the course's <strong>checkpoint</strong>: by the end, all five tools work, and <code>./ok 00</code>, <code>./ok 02</code>, and <code>./ok 03</code> are all green — the halfway point of the whole build.</p>
+<hr>
+<h2 id="1-from-eyes-to-hands-same-table-new-branches">1. From Eyes to Hands: Same Table, New Branches</h2>
+<h3 id="concept">Concept</h3>
+<p>Recall lecture 02 §3: <code>runTool</code> is a <strong>dispatch table</strong> — one entry point, one <code>switch (name)</code>, one <code>case</code> per tool, a <code>default</code> that refuses anything unrecognized. You already have two branches in place. Today's job is mechanically identical to what you already did twice: add a <code>case</code>, write the body, <code>return</code> a string, let failures <code>throw</code>. The only thing that changes lecture to lecture is <em>what the branch does</em>, never the shape it does it in.</p>
+<p>Open <code>index.ts</code> and find the two cases you wrote for lecture 02, plus the <code>default</code> case beneath them. That's where <code>write_file</code>, <code>edit_file</code>, and <code>bash</code> go — three more <code>case</code> labels in the same <code>switch</code>, in any order relative to each other, as long as they stay above <code>default</code> (a <code>switch</code> doesn't require any particular case ordering, but <code>default</code> conventionally goes last so a reader scans real cases before the fallback).</p>
+<h3 id="why-it-matters">Why It Matters</h3>
+<p>A dispatch table's entire value proposition, restated from lecture 02 §3, is that adding a sixth branch never touches the first five. If today's work makes you edit anything inside your existing <code>read_file</code> or <code>list_files</code> cases, that's a signal something is wrong — not a normal part of "extending" the switch. This is the same property that makes <code>TOOLS</code> (the schema array) safe to have five complete entries already sitting in <code>index.ts</code> since lecture 01: the model has known about <code>write_file</code>, <code>edit_file</code>, and <code>bash</code> by name and schema since before you'd written a single line of <code>runTool</code>. Today you're just making three promises the schema already made come true.</p>
+<h3 id="your-task">Your Task</h3>
+<p>Before writing any code: predict, don't write. Does adding <code>write_file</code>, <code>edit_file</code>, and <code>bash</code> as new <code>case</code> branches require touching anything inside your existing <code>read_file</code> or <code>list_files</code> cases?</p>
+<h3 id="checkpoint">Checkpoint</h3>
+<p>No. Dispatch tables are exactly this kind of open/closed structure: extending them by adding a case is additive, never a modification to what's already there. If your plan for today involves editing either of lecture 02's cases, stop and reconsider — nothing about them needs to change.</p>
+<p><em>Stuck? See <a href="#snippet-1-section-1-unlock-answer">Snippet 1</a> in the Appendix.</em></p>
+<hr>
+<h2 id="2-problem-31-write_file--writing-blind-reporting-honestly">2. Problem 3.1: <code>write_file</code> — Writing Blind, Reporting Honestly</h2>
+<h3 id="concept-1">Concept</h3>
+<p><code>write_file</code> does two things <code>read_file</code> never had to: it can create a file that doesn't exist yet (including its parent directories), and it changes what's on disk instead of only reading it. Node's <code>fs.writeFileSync(path, content)</code> — the write-side counterpart to <code>fs.readFileSync</code> from lecture 02 — handles the actual write, synchronously, same as before. The new piece is the directory problem: if the model asks to write <code>nested/deep/out.txt</code> and neither <code>nested/</code> nor <code>nested/deep/</code> exist yet, a plain <code>writeFileSync</code> call throws <code>ENOENT</code> before it ever gets to create the file, because <code>writeFileSync</code> never creates directories for you.</p>
+<p><strong>Node gloss — <code>path.dirname</code> and <code>path.resolve</code>.</strong> <code>path</code> (imported at the top of <code>index.ts</code> as <code>import * as path from &quot;node:path&quot;</code>) is Node's path-manipulation module. <code>path.dirname(p)</code> strips the last path segment and returns everything before it — the same job as chopping a string at its last <code>/</code> (<code>path.dirname(&quot;nested/deep/out.txt&quot;)</code> → <code>&quot;nested/deep&quot;</code>; <code>path.dirname(&quot;out.txt&quot;)</code> → <code>&quot;.&quot;</code>, since a bare filename's "directory" is the current one). <code>path.resolve(p)</code> turns a possibly-relative path into an absolute one, anchored at the current working directory if <code>p</code> doesn't already start with <code>/</code>. Combining the two — resolve first, then take the dirname of the <em>absolute</em> path — means the directory-creation step behaves identically whether the model handed you <code>&quot;notes.txt&quot;</code> or <code>&quot;/full/path/notes.txt&quot;</code>; it's a defensive habit, not something today's tests specifically require you to get exactly right.</p>
+<p><strong>Node gloss — <code>fs.mkdirSync(dir, { recursive: true })</code>.</strong> Plain <code>mkdirSync</code> throws if any intermediate directory in <code>dir</code> is missing — you'd need to create <code>nested/</code> before <code>nested/deep/</code>, one level at a time. Passing <code>{ recursive: true }</code> makes it behave like the shell's <code>mkdir -p</code>: it creates every missing intermediate directory in one call, and — just as importantly — it does <strong>not</strong> throw if the directory already exists. That second property matters here: you're calling this on <em>every</em> <code>write_file</code> call, including ones where the parent directory is already there.</p>
+<h3 id="why-it-matters-1">Why It Matters</h3>
+<p>Without directory auto-creation, the model would have to plan two tool calls for the common case of "create a new file in a new subfolder" — first some kind of <code>mkdir</code> step, then the write — and your tool schema doesn't even offer a <code>mkdir</code> tool. <code>TOOLS[2]</code>'s description already promises this for you (<code>&quot;Creates parent directories as needed&quot;</code> — go re-read it in <code>index.ts</code>, it's been sitting there, GIVEN, since lecture 01). Your job today is making that promise true.</p>
+<p>The second half of this problem — what you <code>return</code> — is easy to under-think because <em>no test in <code>tests/03_mutating_tools.test.ts</code> checks <code>write_file</code>'s return value at all.</em> Both <code>write_file</code> tests only inspect the file on disk afterward. That's a trap, not a green light: recall lecture 01 §3, "every capability the model appears to have... is entirely mediated by what the harness chooses to put into <code>messages</code>." If <code>write_file</code> returns <code>&quot;&quot;</code>, <code>./ok 03</code> still passes — and the model, on its next turn, sees an empty <code>tool_result</code> and has no idea whether the write happened, what path it landed at, or how much content went in. Return something that reports what happened: which path, and some confirmation of what was written. The tests won't catch you skipping this; the whole point of the tool would be quietly broken anyway.</p>
+<h3 id="your-task-1">Your Task</h3>
+<p><strong>Spec.</strong> Add a <code>write_file</code> case to the <code>switch</code>. Given <code>input.path</code> and <code>input.content</code>, create any missing parent directories, write the file (creating it if new, overwriting it if it exists), and return a string that reports what happened.</p>
+<p><strong>Worked example.</strong> <code>runTool(&quot;write_file&quot;, { path: &quot;out.txt&quot;, content: &quot;abc&quot; })</code> must leave a file at <code>out.txt</code> containing exactly <code>&quot;abc&quot;</code> — no added newline, no wrapping. <code>runTool(&quot;write_file&quot;, { path: &quot;nested/deep/out.txt&quot;, content: &quot;x&quot; })</code>, run against a directory where neither <code>nested/</code> nor <code>nested/deep/</code> exist yet, must leave <code>nested/deep/out.txt</code> containing <code>&quot;x&quot;</code>, with both intermediate directories created along the way.</p>
+<p><strong>Constraints</strong> (from <code>tests/03_mutating_tools.test.ts</code>):</p>
+<pre><code class="language-ts">it("creates a file with the given content", () =&gt; {
+  const p = path.join(dir, "out.txt");
+  runTool("write_file", { path: p, content: "abc" });
+  expect(fs.readFileSync(p, "utf8")).toBe("abc");
+});
+
+it("creates missing parent directories so the model needn't mkdir first", () =&gt; {
+  const p = path.join(dir, "nested/deep/out.txt");
+  runTool("write_file", { path: p, content: "x" });
+  expect(fs.readFileSync(p, "utf8")).toBe("x");
+});</code></pre>
+<p>Both <code>path</code> and <code>content</code> are <code>required</code> in <code>write_file</code>'s schema (<code>required: [&quot;path&quot;, &quot;content&quot;]</code> — check <code>TOOLS[2]</code> in <code>index.ts</code>), unlike <code>list_files</code>'s optional <code>path</code> from lecture 02. There's no <code>input.path ?? ...</code> defaulting to write here; the model is contractually obligated to send both.</p>
+<blockquote class="callout hint"><strong>Hint:</strong> Create the parent directory before writing — one call to <code>fs.mkdirSync</code> with the recursive option, using <code>path.dirname</code> (optionally combined with <code>path.resolve</code>, as discussed above) to compute <em>which</em> directory to create from <code>input.path</code>. Then a single call to the write-side counterpart of the <code>readFileSync</code> you used in lecture 02, passing <code>input</code>'s path and content. Your return value is up to you — just make sure it names the path and confirms the write happened.</blockquote>
+<p><strong>Unlock questions:</strong></p>
+<ol><li>Since no test asserts <code>write_file</code>'s return value, returning <code>&quot;&quot;</code> would technically pass every test in this file. Why is that still a bad implementation, given what lecture 01 §3 said about what the model can and can't see?</li><li>Plain <code>fs.mkdirSync(dir)</code> (no options) throws if any intermediate directory is missing. What specifically does <code>{ recursive: true }</code> change, and which of the two tests above exists purely to catch you if you forgot it?</li><li><code>write_file</code>'s schema has <code>required: [&quot;path&quot;, &quot;content&quot;]</code>, unlike <code>list_files</code>'s <code>required: []</code> from lecture 02. Does your <code>write_file</code> case need any <code>input.content ?? ...</code> fallback logic the way <code>list_files</code> needed <code>input.path ?? &quot;.&quot;</code>? Why or why not?</li></ol>
+<h3 id="checkpoint-1">Checkpoint</h3>
+<p>Run just this problem's tests in isolation:</p>
+<pre><code>npx vitest run tests/03_mutating_tools.test.ts -t "write_file"</code></pre>
+<p>Expected: both <code>write_file</code> tests pass, everything else in the file (<code>edit_file</code>, <code>bash</code>) is skipped by the <code>-t</code> filter — not failing, just not yet attempted.</p>
+<p><em>Stuck? See <a href="#snippet-2-write_file-case">Snippet 2</a> in the Appendix.</em></p>
+<hr>
+<h2 id="3-problem-32-edit_file--the-uniqueness-invariant">3. Problem 3.2: <code>edit_file</code> — The Uniqueness Invariant</h2>
+<h3 id="concept-2">Concept</h3>
+<p><code>edit_file</code> looks, at first glance, like it should be a one-liner: find <code>old_string</code> in the file, swap it for <code>new_string</code>. The catch — the entire reason this is the star of the lecture — is what happens when <code>old_string</code> doesn't appear <em>exactly once</em>.</p>
+<p>Think about it the way you'd think about a <strong>hash map key</strong>. Inserting into a hash map with a duplicate key is well-defined only because the map has a rule for what happens (overwrite, reject, chain) — but a <em>string-replacement edit</em> has no such built-in rule. If <code>old_string</code> appears twice in the file, which occurrence did the model mean? "The first one" is a guess. "The last one" is a guess. Silently picking one is exactly how an agent corrupts a file while reporting success — the model asked for one specific change, the tool made <em>a</em> change, and nobody, including the model, can tell from the returned string which one actually happened. <strong>An edit whose target isn't unique isn't an ambiguous edit — it's not a valid edit request at all</strong>, the same way a hash map lookup with a key that could resolve to two different entries isn't "solved" by arbitrarily returning one of them.</p>
+<p>You've built turn-based simulators before — think about how you'd want a game engine to treat a player's move if its textual description matched two different legal moves on the board (say, "move the piece at the edge" when two different pieces both sit at an edge). A well-built engine doesn't guess which one the player meant and silently execute it; it rejects the move as <strong>illegal</strong> and asks for a more specific description. <code>edit_file</code>'s uniqueness check is that same design, applied to text instead of a board.</p>
+<p>The mechanical trick for <em>checking</em> uniqueness is a neat one-liner: <code>text.split(old_string)</code> breaks the file's text into pieces wherever <code>old_string</code> occurs. If <code>old_string</code> occurs <code>N</code> times, splitting on it produces <code>N + 1</code> pieces — the same fencepost relationship as <code>N</code> fenceposts creating <code>N + 1</code> gaps between them. So <code>text.split(old_string).length - 1</code> gives you the exact occurrence count, with zero scanning logic of your own to write.</p>
+<h3 id="why-it-matters-2">Why It Matters</h3>
+<p>This is, almost verbatim, the mechanism real Claude Code uses for its own edit tool. The reason isn't cleverness for its own sake — it's that "edit a file" is a genuinely dangerous operation to get wrong silently. A <code>read_file</code> bug produces a wrong answer the model might catch on its own; a <code>write_file</code> bug overwrites something you can often just re-run to fix. An <code>edit_file</code> bug that "succeeds" by editing the wrong occurrence of a common string (imagine <code>old_string: &quot;return null;&quot;</code> in a file with a dozen functions) produces a file that looks fine, passes a shallow glance, and is silently, subtly wrong — the worst kind of bug, because nothing about the tool's reported success hints that anything went sideways.</p>
+<p>Refusing loudly is the fix. Recall lecture 02 §5's convention: <code>runTool</code> never returns an error as a normal string, it throws — and the caller (eventually <code>agentLoop</code>, lecture 05) converts that into an <code>is_error: true</code> tool_result the model reads and can react to. <code>edit_file</code> needs <em>two different</em> refusal messages, not one generic "edit failed," because the model's correct next move differs completely depending on which failure occurred: zero matches means the model misremembered the file's exact text and needs to re-read it; more than one match means the model needs to include more surrounding context in <code>old_string</code> to pin down a single occurrence (exactly what <code>TOOLS[3]</code>'s description already tells it: <em>"old_string must appear EXACTLY once... include surrounding lines to make it unique"</em>). A generic error would leave the model guessing which kind of mistake it made.</p>
+<h3 id="your-task-2">Your Task</h3>
+<p><strong>Spec.</strong> Add an <code>edit_file</code> case. Read the file at <code>input.path</code>. Count how many times <code>input.old_string</code> occurs in its contents. If zero, throw an error whose message contains <code>&quot;not found&quot;</code>. If more than one, throw an error whose message contains <code>&quot;appears N times&quot;</code> (with the real count substituted for <code>N</code>) and leaves the file on disk <strong>completely untouched</strong>. If exactly one, replace that occurrence with <code>input.new_string</code>, write the file back, and return a string reporting what happened.</p>
+<p><strong>Worked example.</strong> File <code>f.txt</code> contains <code>&quot;one two three&quot;</code>. <code>runTool(&quot;edit_file&quot;, { path: &quot;f.txt&quot;, old_string: &quot;two&quot;, new_string: &quot;2&quot; })</code> leaves <code>f.txt</code> containing <code>&quot;one 2 three&quot;</code>. File <code>f.txt</code> contains <code>&quot;aa&quot;</code> (the string <code>&quot;a&quot;</code> occurs twice). <code>runTool(&quot;edit_file&quot;, { path: &quot;f.txt&quot;, old_string: &quot;a&quot;, new_string: &quot;b&quot; })</code> throws, and — critically — <code>f.txt</code> still contains <code>&quot;aa&quot;</code> afterward, unchanged.</p>
+<p><strong>Constraints</strong> (from <code>tests/03_mutating_tools.test.ts</code>):</p>
+<pre><code class="language-ts">it("replaces a uniquely-matching old_string", () =&gt; {
+  const p = path.join(dir, "f.txt");
+  fs.writeFileSync(p, "one two three");
+  runTool("edit_file", { path: p, old_string: "two", new_string: "2" });
+  expect(fs.readFileSync(p, "utf8")).toBe("one 2 three");
+});
+
+it("throws when old_string is not found — no silent no-op edits", () =&gt; {
+  const p = path.join(dir, "f.txt");
+  fs.writeFileSync(p, "hello");
+  expect(() =&gt; runTool("edit_file", { path: p, old_string: "xyz", new_string: "q" })).toThrow(/not found/);
+});
+
+it("throws when old_string appears more than once — the invariant that keeps edits unambiguous", () =&gt; {
+  const p = path.join(dir, "f.txt");
+  fs.writeFileSync(p, "aa"); // "a" appears twice
+  expect(() =&gt; runTool("edit_file", { path: p, old_string: "a", new_string: "b" })).toThrow(/appears 2 times/);
+  // File must be untouched when the edit is refused.
+  expect(fs.readFileSync(p, "utf8")).toBe("aa");
+});</code></pre>
+<blockquote class="callout hint"><strong>Hint:</strong> Read the file first (you already know how — same call as lecture 02's <code>read_file</code> case). Compute the occurrence count using the split-length trick described above. Branch on that count: <code>0</code> → throw with <code>&quot;not found&quot;</code> in the message; <code>&gt; 1</code> → throw with <code>&quot;appears ${count} times&quot;</code> in the message; otherwise, write the replaced text back and return a confirmation string. Notice the ordering this forces: the count check has to happen <em>before</em> any <code>fs.writeFileSync</code> call, or the "file must be untouched" assertion in the third test will fail even if your error message is exactly right.</blockquote>
+<blockquote class="callout warn"><strong>Common mistake:</strong> Using <code>String.prototype.replaceAll</code> or a global regex to "just fix all occurrences at once" instead of refusing. That silently does the opposite of what this tool is for — it doesn't ask which occurrence the model meant, it changes <em>all</em> of them, which is a different (and, for this tool, wrong) operation. <code>edit_file</code> targets exactly one occurrence, or none.</blockquote>
+<p><strong>Unlock questions:</strong></p>
+<ol><li>Walk through <code>&quot;aa&quot;.split(&quot;a&quot;)</code> by hand — what array does it produce, and why does subtracting 1 from its length give you the correct occurrence count of <code>2</code>?</li><li>The "appears more than once" test also asserts the file on disk is unchanged afterward. What does that imply about the order of operations in your <code>edit_file</code> case — specifically, what must happen (and <em>not</em> happen) before you're sure the count is exactly 1?</li><li>Why does the tool need two distinct error messages ("not found" vs. "appears N times") instead of one generic "edit failed, try again"? Think about what the model would need to do differently on its next turn in each of the two failure cases.</li></ol>
+<h3 id="checkpoint-2">Checkpoint</h3>
+<pre><code>npx vitest run tests/03_mutating_tools.test.ts -t "edit_file"</code></pre>
+<p>Expected: all three <code>edit_file</code> tests pass (the unique-match case, the not-found case, and the ambiguous case with its untouched-file assertion).</p>
+<p><em>Stuck? See <a href="#snippet-3-edit_file-case">Snippet 3</a> in the Appendix.</em></p>
+<hr>
+<h2 id="4-problem-33-bash--spawning-a-real-shell">4. Problem 3.3: <code>bash</code> — Spawning a Real Shell</h2>
+<h3 id="concept-3">Concept</h3>
+<p><code>bash</code> is the least specialized and most powerful tool in the set: instead of one narrow capability (read a file, write a file, edit a substring), it hands the model an entire shell. Whatever <code>input.command</code> says, <code>bash -c</code> will interpret it exactly the way it would if you'd typed it at a terminal prompt — pipes, <code>&amp;&amp;</code>, redirects, all of it.</p>
+<p><strong>Node gloss — <code>spawnSync</code> vs. the alternatives.</strong> Node's <code>child_process</code> module offers several ways to run an external program: <code>exec</code>/<code>execSync</code> run a command <em>string</em> through the system shell and buffer its output, while <code>spawn</code>/<code>spawnSync</code> take a program name and an argument array separately, and give you back (or, for the async versions, hand you) a structured result rather than deciding for you what "success" and "failure" mean. <code>execSync</code> in particular <em>throws on its own</em> the moment the child process exits non-zero — a real JavaScript exception, with its own shape, that you'd have to inspect and reformat. <code>spawnSync</code>, by contrast, never throws for a non-zero exit; it just returns an object describing what happened (its exit code among other fields) and leaves the decision of "is this a success or a failure" entirely to your code. That's exactly the control <code>runTool</code> needs: you already have a convention (errors throw, lecture 02 §5) and you want <em>your</em> code — not Node's child-process internals — deciding when that convention kicks in.</p>
+<p><strong>Node gloss — <code>spawnSync</code>'s return object.</strong> <code>spawnSync(command, args, options)</code> returns an object (TypeScript calls it <code>SpawnSyncReturns</code>) with, among other fields: <code>status</code> — the exit code as a number (<code>0</code> for success; <code>null</code> if the process was killed by a signal instead of exiting normally), <code>stdout</code> — everything the process wrote to standard output, and <code>stderr</code> — everything it wrote to standard error. By default <code>stdout</code>/<code>stderr</code> come back as raw <code>Buffer</code>s (same trap as <code>fs.readFileSync</code> without an encoding, lecture 02 §3) — pass <code>{ encoding: &quot;utf8&quot; }</code> in the options object to get plain strings instead.</p>
+<p><strong>Node gloss — template literals.</strong> You've already used one, briefly, in lecture 02's <code>default</code> case (`<code> </code>Unknown tool: ${name}<code> </code><code>) — a backtick-delimited string with </code>${...}<code> interpolation. Today&#x27;s job needs the fuller version: template literals can span multiple lines and embed </code>\n<code> characters directly, which makes them the natural tool for assembling a multi-line report (exit code on one line, stdout on the next, stderr after that) without a chain of </code>+` concatenation.</p>
+<h3 id="why-it-matters-3">Why It Matters</h3>
+<p>Every prior tool in this course has a narrow, auditable job — you can read <code>runTool</code>'s <code>read_file</code> case and know with certainty every possible thing it can do to your machine (read one file, nothing else). <code>bash</code> has no such ceiling: <code>input.command</code> could be <code>&quot;echo hi&quot;</code> or it could be <code>&quot;rm -rf fixtures/&quot;</code>, and <code>runTool</code>'s job is to run either one, faithfully, and report back exactly what happened — success or failure, stdout, stderr, and the exit code — so the model can react. This is precisely why <code>GATED</code> (already <code>GIVEN</code> in your skeleton: <code>export const GATED = new Set([&quot;write_file&quot;, &quot;edit_file&quot;, &quot;bash&quot;])</code>) singles out <code>bash</code> alongside the other two mutating tools. Nothing you write today asks permission before running — <code>preview</code> and <code>confirm</code> are still <code>throw new Error(&quot;YOUR CODE HERE&quot;)</code> stubs, lecture 04's job. Today you're building the capability; the gate that will stand in front of it, deciding whether a human gets asked first, is built next lecture, on purpose, as a separate step.</p>
+<h3 id="your-task-3">Your Task</h3>
+<p><strong>Spec.</strong> Add a <code>bash</code> case. Run <code>input.command</code> through a real shell using <code>spawnSync</code>, capture its exit code, stdout, and stderr into one string, and return that string on success. On a non-zero exit, <code>throw</code> — with the same captured information (exit code, stdout, stderr) inside the error's message, not a short generic message — so the model can see <em>why</em> it failed, not just that it did.</p>
+<p><strong>Worked example.</strong> <code>runTool(&quot;bash&quot;, { command: &quot;echo hi&quot; })</code> returns a string that contains <code>&quot;hi&quot;</code> and also contains the text <code>&quot;exit code: 0&quot;</code> somewhere in it — the tests only check <code>.toContain(...)</code>, so the exact layout of your output string is your call, as long as those pieces are present. <code>runTool(&quot;bash&quot;, { command: &quot;exit 3&quot; })</code> throws, and the thrown error's message contains the text <code>&quot;exit code: 3&quot;</code>.</p>
+<p><strong>Constraints</strong> (from <code>tests/03_mutating_tools.test.ts</code>):</p>
+<pre><code class="language-ts">it("returns stdout and a zero exit code for a successful command", () =&gt; {
+  const out = runTool("bash", { command: "echo hi" });
+  expect(out).toContain("hi");
+  expect(out).toContain("exit code: 0");
+});
+
+it("throws on a non-zero exit, embedding the exit code so the model sees the failure", () =&gt; {
+  expect(() =&gt; runTool("bash", { command: "exit 3" })).toThrow(/exit code: 3/);
+});</code></pre>
+<blockquote class="callout hint"><strong>Hint:</strong> <code>spawnSync</code>'s signature is <code>spawnSync(command, args, options)</code> — a program name, an argument array, and an options object, returning a result object rather than throwing. <code>bash</code>'s <code>-c</code> flag tells it "treat the next argument as a full command string to execute," which is how you hand it <code>input.command</code> without Node re-parsing it itself. Assemble a single string from the result's exit code, stdout, and stderr — a template literal with embedded <code>\n</code>s is the natural fit. Check the exit code: if it's not <code>0</code>, throw an error using that same assembled string as the message; otherwise return it.</blockquote>
+<p><strong>Unlock questions:</strong></p>
+<ol><li><code>execSync</code> throws on its own the moment a command exits non-zero — you'd have to catch its exception and reformat it to fit <code>runTool</code>'s conventions. Why does <code>spawnSync</code>'s "hand you a status code, you decide" model fit more naturally here, given the errors-throw convention <code>runTool</code> already follows for <code>read_file</code> and <code>edit_file</code>?</li><li>The second test asserts the <em>thrown error's message</em> contains <code>&quot;exit code: 3&quot;</code> via a regex match. What does that imply about what you pass to <code>new Error(...)</code> in the failure branch — is a short message like <code>&quot;command failed&quot;</code> enough, or does the error need to carry the same full output a successful call would have returned?</li><li>(No test covers this — reason about it anyway.) <code>spawnSync</code>'s <code>status</code> field is <code>null</code>, not a number, when a process is killed by a signal rather than exiting normally. Given a check written as <code>status !== 0</code>, what does your <code>bash</code> case do in that case — does it treat a signal-killed process as success or failure? Is that the behavior you'd want?</li></ol>
+<h3 id="checkpoint-3">Checkpoint</h3>
+<pre><code>npx vitest run tests/03_mutating_tools.test.ts -t "bash"</code></pre>
+<p>Expected: both <code>bash</code> tests pass — the successful-command case and the non-zero-exit case.</p>
+<p><em>Stuck? See <a href="#snippet-4-bash-case">Snippet 4</a> in the Appendix.</em></p>
+<hr>
+<h2 id="5-why-lecture-04-exists-the-permission-gate">5. Why Lecture 04 Exists: The Permission Gate</h2>
+<h3 id="concept-4">Concept</h3>
+<p>Step back and look at what you just built. <code>write_file</code> can overwrite any file your Node process can reach. <code>edit_file</code> can rewrite any file's contents, guarded only by the uniqueness invariant — which protects against <em>ambiguity</em>, not against the edit being a bad idea in the first place. <code>bash</code> can run literally anything a shell can run. None of the three ask permission. None of them log a preview for a human to glance at before they run. <code>runTool(&quot;bash&quot;, { command: &quot;rm -rf fixtures/&quot; })</code>, called directly the way <code>tests/03_mutating_tools.test.ts</code> calls every case, runs immediately, no questions asked — and it will, the moment <code>agentLoop</code> (lecture 05) exists and a model decides that's the right move.</p>
+<h3 id="why-it-matters-4">Why It Matters</h3>
+<p>This isn't a bug in today's work — it's the deliberate seam between two lectures. <code>GATED</code> already names all three of today's tools, sitting <code>GIVEN</code> in your skeleton since lecture 01. <code>preview</code> and <code>confirm</code>, the functions that would actually stop and ask, are still stubs. You're building the dangerous capability now, in isolation, so that when lecture 04 wires a human y/n in front of it, you'll feel exactly what problem it's solving — rather than getting the gate "for free" bundled in with the tools themselves, which would hide how much of an agent's safety actually depends on that one extra step.</p>
+<h3 id="your-task-4">Your Task</h3>
+<p>Predict: right now, with everything you've built through the end of lecture 03, if you typed a message at a hypothetical REPL that got the model to call <code>bash</code> with <code>{ command: &quot;rm -rf fixtures/&quot; }</code>, what — concretely — would stop that from actually happening to your real <code>fixtures/</code> directory?</p>
+<h3 id="checkpoint-4">Checkpoint</h3>
+<p>Nothing does. Not today. <code>agentLoop</code> doesn't even exist yet (that's lecture 05), so nothing currently calls <code>runTool</code> in response to a live model at all — but the moment it does, unless <code>confirm</code> is wired in front of <code>GATED</code> tools, every one of today's three cases runs unconditionally the instant the model asks. That gap — dangerous capability built, safety mechanism not yet built — is exactly where lecture 04 picks up.</p>
+<p><em>Stuck? See <a href="#snippet-5-section-5-unlock-answer">Snippet 5</a> in the Appendix.</em></p>
+<hr>
+<h2 id="checkpoint-all-five-tools-work">Checkpoint: All Five Tools Work</h2>
+<p>This is the moment the curriculum calls out as the course's checkpoint. Run each lecture's suite on its own:</p>
+<pre><code>./ok 00</code></pre>
+<pre><code>ok: running tests for problem 00
+
+ RUN  v4.1.10 /Users/jeffrey/Documents/claude_playground/claude-code-nano
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)</code></pre>
+<pre><code>./ok 02</code></pre>
+<pre><code>ok: running tests for problem 02
+
+ RUN  v4.1.10 /Users/jeffrey/Documents/claude_playground/claude-code-nano
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)</code></pre>
+<pre><code>./ok 03</code></pre>
+<pre><code>ok: running tests for problem 03
+
+ RUN  v4.1.10 /Users/jeffrey/Documents/claude_playground/claude-code-nano
+
+ Test Files  1 passed (1)
+      Tests  7 passed (7)</code></pre>
+<p>(<code>./ok</code> takes exactly one argument per run — there's no single <code>./ok 00 02 03</code> invocation; run each in turn, as above. <code>./ok</code> with no argument at all runs everything currently in <code>tests/</code>, which right now means these same three files together.)</p>
+<p>If all three are green, every one of the five tools in <code>TOOLS</code> now has a working <code>runTool</code> case behind it: <code>read_file</code>, <code>list_files</code> (lecture 02), and <code>write_file</code>, <code>edit_file</code>, <code>bash</code> (today). That's 3 of the course's 10 points banked (1 for lecture 01, 2 for lecture 02, 2 for lecture 03), and — more importantly than the points — it de-risks everything downstream. <code>preview</code> (lecture 04) will format previews for exactly these three tools' inputs. <code>confirm</code> (lecture 04) will gate exactly these three. <code>agentLoop</code> (lecture 05) will call <code>runTool</code> and expect exactly the behavior you built today: strings on success, thrown errors on failure. Nothing about the tool layer changes again for the rest of the course — from here on, you're building the machinery <em>around</em> what you just finished.</p>
+<hr>
+<h2 id="key-takeaways">Key Takeaways</h2>
+<ol><li><strong>Same dispatch table, three new branches — nothing about the shape changes.</strong> Extending <code>runTool</code> with <code>write_file</code>, <code>edit_file</code>, and <code>bash</code> never required touching <code>read_file</code> or <code>list_files</code>; that's the entire point of building it as a dispatch table in lecture 02.</li></ol>
+<ol><li><strong><code>write_file</code> is <code>mkdirSync(..., { recursive: true })</code> plus <code>writeFileSync</code>, and its return string matters even though no test checks it.</strong> The model only knows what <code>runTool</code> tells it; a silently-correct-but-uninformative return value is a real defect the test suite can't catch.</li></ol>
+<ol><li><strong><code>edit_file</code>'s uniqueness invariant is the star of this lecture: <code>old_string</code> must behave like a unique key.</strong> Count occurrences with <code>text.split(old_string).length - 1</code>; zero means "not found," more than one means "ambiguous, add context" — and the file must stay untouched until you've confirmed the count is exactly 1. This is the same mechanism real Claude Code's edit tool uses, for the same reason: an edit that could land in two places isn't a smaller version of a correct edit, it's corruption wearing success's clothes.</li></ol>
+<ol><li><strong><code>bash</code> hands the model a real shell via <code>spawnSync</code>, capturing exit code, stdout, and stderr into one reportable string.</strong> <code>spawnSync</code> (unlike <code>execSync</code>) never throws on its own for a non-zero exit — that decision is yours, and you make it the same way <code>read_file</code> already did: throw on failure, embedding the full context (not a generic message) so the model can see exactly what went wrong.</li></ol>
+<ol><li><strong>Errors throw, everywhere, for all five tools now.</strong> Lecture 02 §5's convention — <code>runTool</code> returns a plain <code>string</code> or throws, never a <code>{ ok: false }</code>-shaped result — holds without exception across today's three cases too, and it's exactly the contract lecture 05's <code>agentLoop</code> will consume when it converts a caught exception into an <code>is_error: true</code> tool_result.</li></ol>
+<ol><li><strong>None of today's three tools ask permission — that gap is intentional, and it's lecture 04's entire reason to exist.</strong> <code>GATED</code> already names <code>write_file</code>, <code>edit_file</code>, and <code>bash</code>; <code>preview</code> and <code>confirm</code> are still stubs. You built the capability first, on purpose, so the safety mechanism you build next is felt as a real addition, not an invisible default.</li></ol>
+<hr>
+<h2 id="what-we-skipped-for-future-study-or-future-lectures">What we skipped (for future study or future lectures)</h2>
+<ul><li><code>preview</code> and <code>confirm</code> — formatting a human-readable summary of a gated call and actually asking for a y/n — lecture 04, in full.</li><li>Converting a thrown exception into an <code>is_error: true</code> tool_result inside <code>agentLoop</code> — lecture 05; today you only throw, you don't yet see anything catch it.</li><li>Path traversal and sandboxing — nothing in <code>write_file</code> or <code>edit_file</code> stops the model from targeting a path outside the project directory (e.g. <code>../../etc/hosts</code>), and nothing in <code>bash</code> restricts what the shell can do. Explicitly out of scope for this course (curriculum: "robust sandboxing/security... is a different course").</li><li>Shell-injection-style concerns beyond what <code>spawnSync</code>'s array-argument form already avoids (namely, Node's own argument parsing never re-splits the command string itself) — that string is still interpreted by a real shell with all of a shell's power, by design; that's what the tool is for.</li><li>Signal-killed processes (<code>status === null</code> instead of a numeric exit code) and cross-platform shell differences (<code>bash</code> is hardcoded — no Windows <code>cmd.exe</code>/PowerShell path) — not exercised by today's tests or lecture 06's fixture.</li><li>Streaming a long-running command's output as it happens, rather than waiting for it to finish and capturing everything at once — <code>spawnSync</code> is, by design, fully synchronous and blocking.</li></ul>
+<hr>
+<h2 id="appendix-reference-implementation">Appendix: Reference Implementation</h2>
+<p>Check your work here after attempting each section. Don't read ahead — one snippet at a time.</p>
+<details class="appendix-item" id="snippet-1-section-1-unlock-answer">
+<summary>Snippet 1: Section 1 unlock answer</summary>
+<div class="appendix-body">
+<p>No — adding <code>write_file</code>, <code>edit_file</code>, and <code>bash</code> as new <code>case</code> branches in the same <code>switch (name)</code> never requires touching the existing <code>read_file</code> or <code>list_files</code> cases. Each <code>case</code> is an independent branch keyed on <code>name</code>; the <code>switch</code> doesn't care how many cases exist above or below any given one. This is the same open/closed property a dispatch table gives you anywhere else you've used one (a game engine's move-type dispatch, a state machine's transition table): extension is additive.</p>
+</div>
+</details>
+<details class="appendix-item" id="snippet-2-write_file-case">
+<summary>Snippet 2: <code>write_file</code> case</summary>
+<div class="appendix-body">
+<pre><code class="language-ts">case "write_file":
+  fs.mkdirSync(path.dirname(path.resolve(input.path)), { recursive: true });
+  fs.writeFileSync(input.path, input.content);
+  return `Wrote ${input.content.length} chars to ${input.path}`;</code></pre>
+</div>
+</details>
+<details class="appendix-item" id="snippet-2-write_file-case-unlock">
+<summary>Snippet 2: <code>write_file</code> case &mdash; unlock answers</summary>
+<div class="appendix-body">
+<ol><li><code>&quot;&quot;</code> would pass both tests here because neither one inspects <code>write_file</code>'s return value — they only check the file on disk. But the model never sees the disk; it only sees what <code>runTool</code> returns as the <code>tool_result</code>'s <code>content</code>. An empty return leaves the model with no confirmation of what path was written or how much content landed there, on a turn where that's the only information it has to decide what to do next (lecture 01 §3: "every capability... is entirely mediated by what the harness chooses to put into <code>messages</code>").</li><li>Plain <code>mkdirSync(dir)</code> throws <code>ENOENT</code> if any intermediate directory in <code>dir</code> is missing, and also throws <code>EEXIST</code>-style errors in some cases if the target already exists (depending on Node version and exact call). <code>{ recursive: true }</code> makes both non-issues: it creates every missing intermediate directory in one call, and is a no-op (no throw) if the directory's already there. The second test — <code>&quot;nested/deep/out.txt&quot;</code> written into a directory where neither <code>nested/</code> nor <code>nested/deep/</code> exist — exists specifically to catch an implementation that forgot the recursive option.</li><li>No — <code>write_file</code>'s schema has <code>required: [&quot;path&quot;, &quot;content&quot;]</code>, so the model is contractually required to send both fields; <code>input.content</code> will never be <code>undefined</code> for a schema-conformant call the way <code>input.path</code> legitimately could be <code>undefined</code> for <code>list_files</code>. No <code>??</code> fallback is needed here.</li></ol>
+</div>
+</details>
+<details class="appendix-item" id="snippet-3-edit_file-case">
+<summary>Snippet 3: <code>edit_file</code> case</summary>
+<div class="appendix-body">
+<pre><code class="language-ts">case "edit_file": {
+  // The same trick real Claude Code uses: string replacement, but the
+  // target must be UNIQUE so an edit can never land in the wrong place.
+  // This is an INVARIANT check — exactly one match, or we refuse.
+  const text = fs.readFileSync(input.path, "utf8");
+  const count = text.split(input.old_string).length - 1;
+  if (count === 0) throw new Error(`old_string not found in ${input.path}`);
+  if (count &gt; 1)
+    throw new Error(`old_string appears ${count} times in ${input.path}; add surrounding context to make it unique`);
+  fs.writeFileSync(input.path, text.replace(input.old_string, input.new_string));
+  return `Edited ${input.path}`;
+}</code></pre>
+</div>
+</details>
+<details class="appendix-item" id="snippet-3-edit_file-case-unlock">
+<summary>Snippet 3: <code>edit_file</code> case &mdash; unlock answers</summary>
+<div class="appendix-body">
+<ol><li><code>&quot;aa&quot;.split(&quot;a&quot;)</code> produces <code>[&quot;&quot;, &quot;&quot;, &quot;&quot;]</code> — three elements. Splitting on every occurrence of <code>&quot;a&quot;</code> in <code>&quot;aa&quot;</code> cuts the string at both positions where <code>&quot;a&quot;</code> appears, leaving three pieces (the text before the first <code>a</code>, between the two <code>a</code>s, and after the second <code>a</code> — all empty strings here, but still three array slots). Three elements minus one gives <code>2</code>, the correct occurrence count. In general, <code>N</code> occurrences act as <code>N</code> cut points, producing <code>N + 1</code> pieces — the same relationship as <code>N</code> fenceposts creating <code>N + 1</code> gaps.</li><li>The count check — reading the file and computing <code>text.split(input.old_string).length - 1</code> — must happen entirely before any <code>fs.writeFileSync</code> call. Concretely: you read the file once, compute the count, and only reach the <code>fs.writeFileSync</code> line at all in the <code>count === 1</code> path; both throwing branches return control (via <code>throw</code>) before that line is ever reached, so the file is never written to when the edit is refused.</li><li>Because the model's correct next move differs completely between the two cases. "Not found" means the model's <code>old_string</code> doesn't match the file's actual text at all — it should re-read the file (<code>read_file</code>) to see what's really there before trying again. "Appears N times" means the text <em>is</em> present, just not uniquely — the model should keep its <code>old_string</code> but add more surrounding lines to pin down one specific occurrence, per <code>TOOLS[3]</code>'s own description. A single generic "edit failed" message would erase that distinction and leave the model guessing which kind of mistake it made.</li></ol>
+</div>
+</details>
+<details class="appendix-item" id="snippet-4-bash-case">
+<summary>Snippet 4: <code>bash</code> case</summary>
+<div class="appendix-body">
+<pre><code class="language-ts">case "bash": {
+  const r = spawnSync("bash", ["-c", input.command], { encoding: "utf8" });
+  const out = `exit code: ${r.status}\nstdout:\n${r.stdout}stderr:\n${r.stderr}`;
+  if (r.status !== 0) throw new Error(out); // non-zero exit is an error the model should see
+  return out;
+}</code></pre>
+</div>
+</details>
+<details class="appendix-item" id="snippet-4-bash-case-unlock">
+<summary>Snippet 4: <code>bash</code> case &mdash; unlock answers</summary>
+<div class="appendix-body">
+<ol><li><code>execSync</code> throws immediately on a non-zero exit, and the exception it throws has its own shape (an <code>Error</code> subclass carrying <code>status</code>, <code>stdout</code>, <code>stderr</code> as properties you'd have to dig out and reformat into a message yourself). <code>spawnSync</code> never throws on its own — it always returns the same shaped result object regardless of exit code — so <em>your</em> code decides when to throw and what message to give it, letting you build one consistent "throw with the full captured context" pattern that matches how <code>edit_file</code> and <code>read_file</code> already behave, rather than adapting to a different exception shape Node hands you for free.</li><li>The error needs the <em>same full output</em> a successful call would have returned — exit code, stdout, and stderr all embedded in the message, not a short string like <code>&quot;command failed&quot;</code>. The test's regex <code>/exit code: 3/</code> only requires that substring to be present, but the deeper reason (see §4's Why It Matters) is that the model needs to see <em>why</em> the command failed — what it printed to stdout and stderr — to have any chance of fixing its next attempt. <code>throw new Error(out)</code> reuses the exact same formatted string the success path would have returned.</li><li>With <code>r.status !== 0</code>, a signal-killed process (where <code>status</code> is <code>null</code>, not <code>0</code>) satisfies <code>null !== 0</code> and is treated as a failure — the <code>throw</code> branch runs. That's arguably the right call (a process that never got to exit normally shouldn't be reported as success), though it's not exercised by any test in this lecture and the error message would show <code>&quot;exit code: null&quot;</code>, which is honest but a little confusing without more context. Not something today's tests require you to polish.</li></ol>
+</div>
+</details>
+<details class="appendix-item" id="snippet-5-section-5-unlock-answer">
+<summary>Snippet 5: Section 5 unlock answer</summary>
+<div class="appendix-body">
+<p>Nothing stops it — not yet. <code>GATED</code> (<code>export const GATED = new Set([&quot;write_file&quot;, &quot;edit_file&quot;, &quot;bash&quot;])</code>) is already sitting in <code>index.ts</code>, fully written since lecture 01, and it does name <code>bash</code> as a tool that's supposed to require confirmation. But naming isn't enforcing: <code>preview</code> and <code>confirm</code>, the two functions that would actually check <code>GATED</code>, print a summary, and wait for a human's y/n, are both still <code>throw new Error(&quot;YOUR CODE HERE&quot;)</code> stubs. And even upstream of that, <code>agentLoop</code> — the only piece of code that would ever call <code>confirm</code> in the first place — doesn't exist until lecture 05. Right now, if you called <code>runTool(&quot;bash&quot;, { command: &quot;rm -rf fixtures/&quot; })</code> directly (the way today's tests do), it would simply run. Lecture 04 closes exactly this gap.</p>
+</div>
+</details>
+<hr>
+<p><em>End of lecture.</em></p>
+<hr class="end-rule">
+<nav class="pagenav"><a href="index.html">&uarr; Course home</a> <span class="dot">&middot;</span> <a href="02_read_only_tools.html">&larr; Previous lecture</a> <span class="dot">&middot;</span> <a href="04_the_permission_gate.html">Next lecture &rarr;</a></nav>
+</main>
+</body>
+</html>

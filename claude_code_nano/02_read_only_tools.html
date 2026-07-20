@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tools I: Eyes (read_file, list_files) &mdash; Claude Code Nano</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner"><span class="brand"><a href="index.html">Claude Code Nano</a></span><span class="crumbs"><a href="index.html">Home</a> <span class="dot">&middot;</span> <a href="01_the_shape_of_an_agent.html">&larr; Prev</a> <span class="dot">&middot;</span> <a href="03_mutating_tools.html">Next &rarr;</a></span></div></nav>
+<main class="handout">
+<h1 id="tools-i-eyes-read_file-list_files">Tools I: Eyes (read_file, list_files)</h1>
+<h2 id="a-cs61a-style-lecture-for-builders-of-turn-based-simulators-reading-their-first-tool-contract">A CS61A-Style Lecture for Builders of Turn-Based Simulators, Reading Their First Tool Contract</h2>
+<hr>
+<h2 id="lecture-overview">Lecture Overview</h2>
+<p>Lecture 01 was a spec-reading exercise — you traced a conversation, answered questions, and fixed one warm-up bug that had nothing to do with agents. Today you write the first real function of the course: <code>runTool</code>, the piece of <code>index.ts</code> that turns a model's <em>request</em> into something that actually happens on your machine.</p>
+<p>Recall the two-part definition from lecture 01: an agent is a model that can ask, plus a harness that runs and reports back. <code>TOOLS</code> — the schema array you read last time — is the "ask" half, already fully written, GIVEN, not yours to touch. <code>runTool</code> is the "run" half, and right now it's a single line: <code>throw new Error(&quot;YOUR CODE HERE&quot;)</code>. Every test in <code>tests/02_read_only_tools.test.ts</code> calls <code>runTool</code> directly — no model, no loop, no network — so today is entirely about that one function.</p>
+<p>You'll implement <code>runTool</code> as a <strong>dispatch table</strong>: a <code>switch</code> on the tool's <code>name</code> that routes to the right implementation, with a <code>default</code> case that refuses anything it doesn't recognize. This lecture builds two of its five branches — <code>read_file</code> and <code>list_files</code>, the tools that only look, never change anything. <code>write_file</code>, <code>edit_file</code>, and <code>bash</code> — the branches that touch disk and process — are lecture 03's job, added into this <em>same</em> switch statement.</p>
+<div class="table-wrap"><table><thead><tr><th>Tool</th><th>Half already given (<code>TOOLS</code>)</th><th>Half you write (<code>runTool</code>)</th></tr></thead><tbody><tr><td><code>read_file</code></td><td>done (lecture 01)</td><td><strong>today</strong></td></tr><tr><td><code>list_files</code></td><td>done (lecture 01)</td><td><strong>today</strong></td></tr><tr><td><code>write_file</code></td><td>done (lecture 01)</td><td>lecture 03</td></tr><tr><td><code>edit_file</code></td><td>done (lecture 01)</td><td>lecture 03</td></tr><tr><td><code>bash</code></td><td>done (lecture 01)</td><td>lecture 03</td></tr></tbody></table></div>
+<p><strong>How this lecture works:</strong> two numbered problems, 2.1 and 2.2, each with a spec, a worked example, constraints, and 2–3 unlock questions whose answers live only in the Appendix. Attempt each problem — write real code in <code>index.ts</code> — before checking its snippet. This lecture is worth <strong>2 of the course's 10 points</strong>: <code>./ok 02</code> green plus correct unlock answers.</p>
+<hr>
+<h2 id="1-what-is-a-tool-really-two-halves">1. What Is a Tool, Really? Two Halves</h2>
+<h3 id="concept">Concept</h3>
+<p>You already met this idea in lecture 01 as an abstract definition; today you see its concrete split inside <code>index.ts</code> itself. Scroll to the top of section 1 and you'll find this comment, verbatim:</p>
+<pre><code>// A "tool" is two things: a JSON Schema that DESCRIBES it to the model, and a
+// plain function that RUNS it. The model never executes anything — it only
+// asks; runTool() below is where things actually happen on this machine.
+//
+// DSA framing: a tool is an interface. The schema is the type signature the
+// model programs against; runTool is the implementation behind it.</code></pre>
+<p>This is the same split you've used for years without naming it "agent architecture": an <strong>interface</strong> (a name, a signature, a contract — no body) versus an <strong>implementation</strong> (the body that actually does the work). <code>TOOLS[0]</code> — the <code>read_file</code> entry — is the interface: it tells the model "there's a function called <code>read_file</code>, it takes one required string field <code>path</code>, and here's a sentence describing what it does." Nothing in that entry touches a disk. The disk-touching happens forty lines lower, inside <code>runTool</code>, in code the model never sees and never runs itself.</p>
+<h3 id="why-it-matters">Why It Matters</h3>
+<p>This split is why you can trust an LLM near your filesystem at all without also trusting it to <em>directly execute arbitrary code</em>. The model's output is always just text in a particular shape — a <code>tool_use</code> block asking for <code>read_file</code> with some <code>path</code>. That request is completely inert (lecture 01, §1's checkpoint) until your <code>runTool</code> — code you wrote, code you can read start to finish — decides what "running <code>read_file</code>" actually means. If <code>runTool</code>'s <code>read_file</code> case silently also deleted the file first, the model would never know; it only sees whatever string <code>runTool</code> hands back. The schema is a promise about <em>shape</em>; <code>runTool</code> is the only place that promise gets <em>kept</em>.</p>
+<h3 id="your-task">Your Task</h3>
+<p>No code yet — predict, then check. <code>TOOLS[1]</code> (given, in <code>index.ts</code>) reads:</p>
+<pre><code class="language-ts">{
+  name: "list_files",
+  description:
+    "List the entries of a directory (one level). Directories end with '/'. Call again on a subdirectory to go deeper.",
+  input_schema: {
+    type: "object",
+    properties: { path: { type: "string", description: "Directory to list; defaults to '.'" } },
+    required: [],
+  },
+},</code></pre>
+<p>Suppose, hypothetically, <code>runTool</code>'s <code>list_files</code> case actually listed directories <em>recursively</em>, ignoring the "one level" claim in the description. Would TypeScript's compiler catch this mismatch? Would <code>./ok 02</code>? What's the only thing in this entire system that could ever notice the lie?</p>
+<h3 id="checkpoint">Checkpoint</h3>
+<p>Neither the compiler nor <code>./ok 02</code> cross-checks a tool's prose <code>description</code> against what its <code>runTool</code> case actually does — nothing type-checks English against behavior. Compare that with <code>input_schema</code>, whose <code>type</code>/<code>required</code> fields <em>would</em> eventually matter for validating the shape of <code>input</code> (not enforced by <code>runTool</code> itself, but by convention the model is expected to follow, since it was trained to produce arguments matching the schema it was given). The <strong>only</strong> thing that could ever "notice" a lying description is the model, mid-conversation, when the tool's real behavior doesn't match what it was told — and by then it's already made a decision based on the wrong assumption. This is why tool descriptions are load-bearing documentation, not comments: get one wrong and nothing red-flags it for you.</p>
+<p><em>Stuck? See <a href="#snippet-1-the-two-halves-in-index.ts">Snippet 1</a> in the Appendix.</em></p>
+<hr>
+<h2 id="2-reading-the-contract-the-tools-array">2. Reading the Contract: The TOOLS Array</h2>
+<h3 id="concept-1">Concept</h3>
+<p>Before writing <code>runTool</code>, read <code>TOOLS</code> closely — all of it, not just the two entries you'll implement today. It's the model-facing <strong>interface</strong> for all five tools, and it's already complete; your job in this section is comprehension, not code. Think of it the way you'd read a <code>.d.ts</code> file or an abstract base class before implementing its subclasses: every field in there is a constraint your implementation must satisfy, and every field it <em>omits</em> is freedom your implementation has.</p>
+<p>Two fields matter most for today's work:</p>
+<ul><li><strong><code>required</code></strong> — <code>read_file</code>'s schema has <code>required: [&quot;path&quot;]</code>; <code>list_files</code>'s has <code>required: []</code>. That's not decoration. It's the contract's way of saying "the model must always supply a path to read a file, but may omit it when listing, and here's what happens if it does" (see <code>list_files</code>'s description: <code>&quot;defaults to &#x27;.&#x27;&quot;</code>).</li><li><strong><code>description</code></strong> — the <em>only</em> channel the model has for understanding what a tool does, since it never sees <code>runTool</code>'s source. Every English sentence in there is doing real work: "one level," "Directories end with '/'," "Call again on a subdirectory to go deeper" are all promises your <code>runTool</code> implementation is about to make true.</li></ul>
+<h3 id="why-it-matters-1">Why It Matters</h3>
+<p><code>callModel</code> (lecture 05) passes <code>tools: TOOLS</code> straight to the Anthropic API on every single call. The model re-reads this entire array every turn, the same way it re-reads all of <code>messages</code> (lecture 01, §2). If <code>read_file</code>'s description were vague or wrong, you'd see it as <em>misbehavior</em> three lectures from now — the model calling tools with wrong arguments, or not calling a tool it clearly needed — with no stack trace pointing back to the real cause. Reading the contract now, carefully, is what lets you debug that gap later instead of guessing at it.</p>
+<h3 id="your-task-1">Your Task</h3>
+<p>Answer without running anything:</p>
+<ol><li><code>read_file</code>'s <code>input_schema.properties.path</code> has a <code>description</code> field (<code>&quot;Relative path to the file&quot;</code>). <code>list_files</code>'s <code>path</code> property also has one (<code>&quot;Directory to list; defaults to &#x27;.&#x27;&quot;</code>). Are these two <code>description</code> fields read by your TypeScript code anywhere in <code>runTool</code>? If not, who are they for?</li><li>Given <code>required: []</code> for <code>list_files</code>, is it possible for the model to call <code>list_files</code> with <code>input</code> being the empty object <code>{}</code>? What must <code>runTool</code>'s <code>list_files</code> case do to stay correct in that case?</li></ol>
+<h3 id="checkpoint-1">Checkpoint</h3>
+<p>(1) No — <code>runTool</code> never reads <code>input_schema.properties.path.description</code> at all; that string exists purely for the model, sent over the wire inside the <code>tools</code> array on every <code>callModel</code> call, exactly like a docstring the model reads before deciding how to fill in arguments. Your TypeScript code only ever reads <code>input.path</code> (the actual value the model supplied), never the schema's description of what that field <em>means</em>. (2) Yes — <code>{}</code> is a fully valid call because <code>path</code> isn't <code>required</code>. <code>runTool</code>'s <code>list_files</code> case must supply its own default (<code>.</code>) when <code>input.path</code> is absent, exactly as its <code>description</code> promised. If you build <code>list_files</code> assuming <code>input.path</code> is always present, you have a contract mismatch that only shows up when the model calls it the "empty" way — which is exactly what <code>tests/02_read_only_tools.test.ts</code>'s <code>&quot;defaults to &#x27;.&#x27;&quot;</code> test checks.</p>
+<p><em>Stuck? See <a href="#snippet-2-unlock-answers-contract-reading">Snippet 2</a> in the Appendix.</em></p>
+<hr>
+<h2 id="3-the-dispatch-table-runtools-shape">3. The Dispatch Table: <code>runTool</code>'s Shape</h2>
+<h3 id="concept-2">Concept</h3>
+<p><code>runTool</code> has one job: given a tool <code>name</code> (a string) and its <code>input</code> (an object), run the matching implementation and return a string. You've written this shape before, even if you didn't call it this: a <strong>dispatch table</strong> (also called a jump table) — one entry point that routes to N different code paths based on a key, instead of hand-rolling <code>if (name === &quot;read_file&quot;) {...} else if (name === &quot;list_files&quot;) {...} else if (...)</code>. TypeScript's <code>switch</code> statement <em>is</em> a dispatch table:</p>
+<pre><code class="language-ts">switch (name) {
+  case "read_file":
+    // ...
+  case "list_files":
+    // ...
+  default:
+    // ...
+}</code></pre>
+<p>Each <code>case</code> is a branch; <code>default</code> is the fallback when the key matches nothing — the same role a hash map's "key not found" branch plays, or a state machine's "invalid transition" handler. <code>runTool</code>'s <code>default</code> case is not optional flavor: since <code>name</code> arrives as a plain <code>string</code> (not a restricted union type — <code>input: any</code> means TypeScript isn't checking any of this at compile time), <em>any</em> string could show up, including typos, or tool names from some future version of <code>TOOLS</code> you haven't written a case for yet. <code>default</code> is where you refuse those, loudly.</p>
+<p><strong>TS-ism:</strong> each <code>case</code> here ends in a <code>return</code>, so there's no fallthrough to worry about (the classic C/Java <code>switch</code> footgun where control "falls through" to the next case unless you <code>break</code>). If a <code>case</code> doesn't <code>return</code>, control does fall through to the next one — but every branch you write today returns immediately, so you can set that concern aside for now.</p>
+<h3 id="why-it-matters-2">Why It Matters</h3>
+<p>Five tools, one function, one <code>name</code> string deciding which of five completely different pieces of code runs. Get the dispatch wrong — misspell a case label, forget <code>default</code>, let a case fall through — and the failure mode is silent and specific: the model asks for <code>list_files</code>, and either nothing happens, the wrong tool runs, or an unrelated exception surfaces with no clue that dispatch was the problem. A dispatch table's whole value proposition is that adding a sixth tool later means adding one <code>case</code>, touching nothing else — which is exactly how lecture 03 will extend this same function without rewriting it.</p>
+<h3 id="your-task--problem-21-read_file">Your Task — Problem 2.1: <code>read_file</code></h3>
+<p><strong>Spec.</strong> Implement the <code>read_file</code> case (plus the <code>switch</code> skeleton and <code>default</code> case, since this is the first case you're writing). <code>read_file</code> receives <code>input.path</code>, reads that file, and returns its contents as a <code>string</code>.</p>
+<p><strong>Worked example.</strong> Given a file <code>hello.txt</code> containing the bytes <code>hello nano</code> (no trailing newline), <code>runTool(&quot;read_file&quot;, { path: &quot;hello.txt&quot; })</code> must return the string <code>&quot;hello nano&quot;</code> — not <code>&quot;hello nano\n&quot;</code>, not a <code>Buffer</code>, not JSON-wrapped. Exact bytes, as UTF-8 text.</p>
+<p><strong>Constraints.</strong></p>
+<ul><li>Use <code>fs.readFileSync</code> — already imported at the top of <code>index.ts</code> as <code>import * as fs from &quot;node:fs&quot;</code>. Signature: <code>fs.readFileSync(path: string, encoding: string): string</code> when you pass an encoding; <strong>without</strong> an encoding argument it returns a <code>Buffer</code> (raw bytes, not a <code>string</code>) — which would fail every test here since <code>runTool</code>'s return type is <code>string</code>. Pass <code>&quot;utf8&quot;</code> explicitly.</li><li>If the file doesn't exist, <code>fs.readFileSync</code> throws a <code>Node.js</code> error (<code>ENOENT: no such file or directory</code>) on its own — you don't need to check existence yourself or write your own error message. Let it propagate.</li><li><strong><code>fs.readFileSync</code> is synchronous</strong> — it blocks the whole program until the disk responds, unlike the <code>fs.promises.readFile</code> / <code>await</code> pattern you may have seen elsewhere. That's deliberate for this course; why synchronous is fine here (and what async buys you) is lecture 04's job, once you've seen real <code>await</code> code. For today, synchronous is simply correct and simpler.</li></ul>
+<blockquote class="callout hint"><strong>Hint:</strong> <code>fs.readFileSync</code> takes a path and an encoding, and its return value when given <code>&quot;utf8&quot;</code> is already the string <code>runTool</code> needs — no further processing required. Resist writing a <code>try</code>/<code>catch</code> around it — §5 explains why letting it throw <em>is</em> the correct behavior, not a shortcut.</blockquote>
+<blockquote class="callout warn"><strong>Common mistake:</strong> <code>tests/02_read_only_tools.test.ts:26</code> has a test named "throws on a missing file so the loop can hand the error back to the model" that just calls <code>expect(() =&gt; runTool(...)).toThrow()</code>. The untouched stub — <code>throw new Error(&quot;YOUR CODE HERE&quot;)</code> — also throws on <em>every</em> call, so this specific test <strong>passes even before you write any code</strong>. Don't mistake it for evidence your <code>read_file</code> case works; check the <code>&quot;returns the exact bytes&quot;</code> test too, since that one can't pass by accident.</blockquote>
+<p><strong>Unlock questions:</strong></p>
+<ol><li>Lecture 01 §3 Q4 already established that an error is still a valid result, not a crash (recall the skeleton's doc comment). Given that precedent, why is it <em>correct</em> — not lazy — to let <code>fs.readFileSync</code>'s exception propagate out of <code>runTool</code> instead of catching it and returning an error string yourself?</li><li>Since <code>input: any</code>, TypeScript will not stop you from calling <code>runTool(&quot;read_file&quot;, {})</code> — an object with no <code>path</code> key at all. What happens at runtime when <code>input.path</code> is <code>undefined</code> and you call <code>fs.readFileSync(undefined, &quot;utf8&quot;)</code>?</li></ol>
+<h3 id="checkpoint-2">Checkpoint</h3>
+<p>Once your <code>read_file</code> case is in place, you can check it in isolation — before touching <code>list_files</code> — by filtering vitest directly (bypassing <code>./ok</code>'s all-or-nothing wrapper):</p>
+<pre><code>npx vitest run tests/02_read_only_tools.test.ts -t "read_file"</code></pre>
+<p>Expected:</p>
+<pre><code> RUN  v4.1.10 /Users/jeffrey/Documents/claude_playground/claude-code-nano
+
+ Test Files  1 passed (1)
+      Tests  2 passed | 2 skipped (4)</code></pre>
+<p>Both <code>read_file</code> tests pass; the two <code>list_files</code> tests are skipped by the <code>-t</code> filter, not failing — that's expected, you haven't written that case yet.</p>
+<p><em>Stuck? See <a href="#snippet-3-dispatch-skeleton--read_file">Snippet 3</a> in the Appendix.</em></p>
+<hr>
+<h2 id="4-problem-22-list_files-and-nodes-fsreaddirsync">4. Problem 2.2: <code>list_files</code> and Node's <code>fs.readdirSync</code></h2>
+<h3 id="concept-3">Concept</h3>
+<p><code>list_files</code> is one level deeper than <code>read_file</code> in two ways: its input is optional (§2), and its output requires <em>classifying</em> each entry, not just returning raw bytes. <code>fs.readdirSync(dir, { withFileTypes: true })</code> returns an array of <code>Dirent</code> objects (short for "directory entry") instead of plain filename strings. <strong>Gloss: <code>Dirent</code></strong> is a small Node.js class wrapping one directory entry; it carries <code>.name</code> (the filename, a string) and methods like <code>.isDirectory()</code>, <code>.isFile()</code> that tell you what <em>kind</em> of entry it is — information a plain <code>string[]</code> of names could never carry, since a name alone doesn't say whether <code>&quot;sub&quot;</code> is a file called <code>sub</code> or a directory called <code>sub</code>.</p>
+<p>That's exactly the distinction the tool's description promises: <em>"Directories end with '/'."</em> You build that suffix yourself, per entry, using <code>.isDirectory()</code>.</p>
+<h3 id="why-it-matters-3">Why It Matters</h3>
+<p>Look back at <code>TOOLS[1]</code>'s description: <em>"List the entries of a directory (one level)... Call again on a subdirectory to go deeper."</em> Notice what's absent from <code>runTool</code>: any recursion. <code>list_files</code> never calls itself. The "going deeper" the description promises happens entirely on the <em>model's</em> side of the wire — this is the lecture 01 trace again: the model sees <code>&quot;sub/&quot;</code> in the result, decides that's interesting, and issues a <strong>second, separate</strong> <code>tool_use</code> request for <code>list_files</code> with <code>path: &quot;sub&quot;</code> on its next turn. Two calls to <code>runTool</code>, two round trips through <code>agentLoop</code> (lecture 05), zero loops inside <code>list_files</code> itself. The "/" suffix isn't cosmetic — it's the one signal the model has to <em>decide</em> whether recursing is worth it at all.</p>
+<h3 id="your-task-2">Your Task</h3>
+<p><strong>Spec.</strong> Add a <code>list_files</code> case to the same <code>switch</code>. Given a directory path (or <code>.</code> if <code>input.path</code> is absent), return a newline-joined string of that directory's immediate entries, with <code>/</code> appended to any entry that's a directory.</p>
+<p><strong>Worked example.</strong> A directory containing a file <code>a.txt</code> and a subdirectory <code>sub</code> should produce the string <code>&quot;a.txt\nsub/&quot;</code> (order doesn't matter — the tests sort before comparing). Note there's no trailing newline, and no separate output for what's <em>inside</em> <code>sub</code>.</p>
+<p><strong>Constraints.</strong></p>
+<ul><li><code>input.path ?? &quot;.&quot;</code> — the <code>??</code> (nullish coalescing) operator, not <code>||</code>. <code>??</code> only falls back when the left side is <code>null</code>/<code>undefined</code>; <code>||</code> would <em>also</em> fall back on an empty string <code>&quot;&quot;</code> or <code>0</code>, which isn't what you want here (an explicit <code>&quot;&quot;</code> isn't the same as "omitted"). <code>input.path</code> is either a real string or <code>undefined</code> (never supplied), so <code>??</code> is the precise tool.</li><li>Build the <code>&quot;/&quot;</code> suffix per-entry with <code>.isDirectory()</code>; join everything with <code>&quot;\n&quot;</code> via <code>.join(&quot;\n&quot;)</code>.</li><li>One level only — do not read into subdirectories yourself.</li></ul>
+<blockquote class="callout hint"><strong>Hint:</strong> Method chaining does the whole case in one expression: start from <code>fs.readdirSync(dir, { withFileTypes: true })</code>, then you'll chain <code>.map()</code> over the resulting <code>Dirent[]</code> to build the <code>&quot;/&quot;</code> suffix per entry, then <code>.join(&quot;\n&quot;)</code> to collapse the array into the one string <code>runTool</code> must return.</blockquote>
+<blockquote class="callout warn"><strong>Common mistake:</strong> Forgetting <code>{ withFileTypes: true }</code>. Without it, <code>fs.readdirSync</code> returns plain <code>string[]</code> filenames with no <code>.isDirectory()</code> method at all — TypeScript will flag the missing method as a compile error, which is at least loud, but it's easy to lose an hour wondering why <code>Dirent</code> methods "don't exist" before realizing the option was never passed.</blockquote>
+<p><strong>Unlock questions:</strong></p>
+<ol><li>Why does <code>fs.readdirSync(dir, { withFileTypes: true })</code> return <code>Dirent[]</code> instead of <code>string[]</code> — what specific piece of information would be <em>unrecoverable</em> from a bare filename string alone?</li><li>The docstring says "Call again on a subdirectory to go deeper." <code>runTool</code>'s <code>list_files</code> case contains no loop and no recursive call. Where, concretely — which function, in which lecture — is the "calling again" actually implemented?</li><li>Would <code>input.path || &quot;.&quot;</code> (using <code>||</code> instead of <code>??</code>) behave differently from <code>input.path ?? &quot;.&quot;</code> for any input the <em>model</em> could realistically send, given <code>path</code>'s schema type is <code>string</code>?</li></ol>
+<h3 id="checkpoint-3">Checkpoint</h3>
+<p>Run the full lecture 02 suite:</p>
+<pre><code>./ok 02</code></pre>
+<p>Expected — real output, captured from this exact repo:</p>
+<pre><code>ok: running tests for problem 02
+
+ RUN  v4.1.10 /Users/jeffrey/Documents/claude_playground/claude-code-nano
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)</code></pre>
+<p>All 4 tests green: both <code>read_file</code> tests and both <code>list_files</code> tests. That's Problem 2.1 and 2.2 done — 2 of the course's 10 points, plus correct answers to every unlock question above.</p>
+<p><em>Stuck? See <a href="#snippet-4-list_files-case--full-runtool-so-far">Snippet 4</a> in the Appendix.</em></p>
+<hr>
+<h2 id="5-errors-throw-not-return">5. Errors Throw, Not Return</h2>
+<h3 id="concept-4">Concept</h3>
+<p>Look at what you just wrote: neither case <em>catches</em> anything. <code>fs.readFileSync</code> on a missing path throws; you don't wrap it in <code>try</code>/<code>catch</code>; it just propagates straight out of <code>runTool</code>. This is the convention for <strong>every</strong> tool in this course, not just today's two: <strong>failures throw exceptions. <code>runTool</code> never returns an error as a normal string, and never returns <code>null</code>/<code>undefined</code> to signal "something went wrong."</strong></p>
+<p>Compare this to a design where <code>runTool</code> returned, say, <code>{ ok: false, error: &quot;...&quot; }</code> — a result type you'd have to check at every call site. Throwing instead means the <em>type signature</em> stays simple (<code>runTool</code> always returns a plain <code>string</code>, full stop) while failure is handled structurally, by whoever calls <code>runTool</code> and chooses to catch. Right now, nothing catches it — <code>tests/02_read_only_tools.test.ts</code>'s <code>&quot;throws on missing file&quot;</code> test is <em>itself</em> the catcher, using <code>expect(() =&gt; ...).toThrow()</code>.</p>
+<h3 id="why-it-matters-4">Why It Matters</h3>
+<p>This is a seed for lecture 05, so plant it now rather than relearning it then: <code>agentLoop</code> will wrap every <code>runTool</code> call in a <code>try</code>/<code>catch</code>, and when it catches something, it doesn't crash the program or drop the tool call — it converts the exception into an ordinary <code>tool_result</code> block with <code>is_error: true</code>, and sends that back to the model, exactly like a successful result. The model reads the error message as <em>text</em> and gets to react — retry with a different path, ask the user, give up gracefully. You already saw this predicted in lecture 01's unlock question 4 (the hypothetical <code>edit_file</code> failure): "the loop does <strong>not</strong> stop — an error is still a result, just an unhappy one." Today's <code>read_file</code> throwing on a missing file is the first <em>real</em> instance of that pattern, not just a hypothetical.</p>
+<h3 id="your-task-3">Your Task</h3>
+<p>No new code — just connect the dots. In lecture 01's trace, <code>messages[4]</code> held a <em>successful</em> <code>tool_result</code> (<code>is_error: false</code>). If, instead, the model had asked for <code>read_file</code> on a path that doesn't exist, and your <code>runTool</code> throws exactly the way you just built it to, what string would end up inside that <code>tool_result</code>'s <code>content</code> field once lecture 05's loop catches it? (You don't need lecture 05's code to answer this — you need to know what <code>err.message</code> looks like for a Node <code>fs</code> error.)</p>
+<h3 id="checkpoint-4">Checkpoint</h3>
+<p>Something close to <code>&quot;ENOENT: no such file or directory, open &#x27;nope.txt&#x27;&quot;</code> — whatever <code>fs.readFileSync</code> puts in its <code>Error.message</code> when the file is missing, unmodified, because <code>runTool</code> never touches or rewrites the error before it leaves the function. Whatever string Node's error carries is <em>exactly</em> what the model will eventually read as the reason its request failed — one more reason not to swallow or generic-ify errors inside <code>runTool</code> today, even though nothing is watching for it yet.</p>
+<p><em>Stuck? See <a href="#snippet-5-tracing-an-error-forward-to-lecture-05">Snippet 5</a> in the Appendix.</em></p>
+<hr>
+<h2 id="key-takeaways">Key Takeaways</h2>
+<ol><li><strong>A tool is a schema plus a function, and only one of those two you're allowed to touch today.</strong> <code>TOOLS</code> is a fixed, model-facing contract; <code>runTool</code> is the implementation, and nothing checks that the two agree except careful reading on your part.</li></ol>
+<ol><li><strong><code>switch (name) { ... default: ... }</code> is a dispatch table</strong> — the DSA structure behind "route to one of N implementations by a key," with <code>default</code> as the mandatory safety net for any tool name that isn't (yet, or ever) a real case.</li></ol>
+<ol><li><strong>Node's <code>fs.readFileSync</code>/<code>fs.readdirSync</code> are synchronous and block until disk I/O completes</strong> — simple and correct for this single-user CLI; the <code>async</code>/<code>await</code> alternative and <em>why</em> it matters is lecture 04's job.</li></ol>
+<ol><li><strong><code>{ withFileTypes: true }</code> turns filenames into <code>Dirent</code>s</strong>, the only way to know whether an entry is a file or a directory without a second <code>fs</code> call per entry.</li></ol>
+<ol><li><strong><code>list_files</code> never recurses — the model does, one <code>tool_use</code> call at a time.</strong> "One level" in the schema and "no loop in <code>runTool</code>" are the same design decision seen from two sides.</li></ol>
+<ol><li><strong>Errors throw; nothing in <code>runTool</code> catches its own failures.</strong> That's not an oversight — it's a contract lecture 05's <code>agentLoop</code> is built to consume, converting any thrown exception into an <code>is_error: true</code> tool_result the model reads like any other answer.</li></ol>
+<hr>
+<h2 id="what-we-skipped-for-future-study-or-future-lectures">What we skipped (for future study or future lectures)</h2>
+<ul><li>Catching and translating exceptions into <code>tool_result</code> blocks — that's <code>agentLoop</code>, lecture 05.</li><li><code>write_file</code>, <code>edit_file</code>, <code>bash</code> — the three tools that change the machine, and the permission gate that guards them — lectures 03 and 04.</li><li>Async/await, <code>fs.promises</code>, and why synchronous I/O is a deliberate simplification here rather than the "correct" choice in general — lecture 04.</li><li>Path traversal / sandboxing concerns (what stops <code>read_file</code> from reading <code>/etc/passwd</code>?) — explicitly out of scope for this course (curriculum: "robust sandboxing/security... is a different course").</li><li>Symlinks, permission errors distinct from "file not found," and other <code>fs</code> edge cases <code>Dirent</code> and <code>readFileSync</code> can surface — not tested here, and not needed for the fixture bug in lecture 06.</li></ul>
+<hr>
+<h2 id="appendix-reference-implementation">Appendix: Reference Implementation</h2>
+<p>Check your work here after attempting each section. Don't read ahead — one snippet at a time.</p>
+<details class="appendix-item" id="snippet-1-the-two-halves-in-index.ts">
+<summary>Snippet 1: The two halves, in <code>index.ts</code></summary>
+<div class="appendix-body">
+<pre><code class="language-ts">export const TOOLS: Anthropic.Tool[] = [
+  {
+    name: "read_file",
+    description: "Read and return the contents of a file at a relative path.",
+    input_schema: {
+      type: "object",
+      properties: { path: { type: "string", description: "Relative path to the file" } },
+      required: ["path"],
+    },
+  },
+  {
+    name: "list_files",
+    description:
+      "List the entries of a directory (one level). Directories end with '/'. Call again on a subdirectory to go deeper.",
+    input_schema: {
+      type: "object",
+      properties: { path: { type: "string", description: "Directory to list; defaults to '.'" } },
+      required: [],
+    },
+  },
+  // ... write_file, edit_file, bash follow (unchanged by this lecture)
+];</code></pre>
+<p>This whole array is GIVEN — already in your <code>index.ts</code>, nothing to write. The two entries above are the "ask" half for today's two tools; <code>runTool</code>'s <code>read_file</code>/<code>list_files</code> cases (Snippets 3–4) are the "run" half.</p>
+</div>
+</details>
+<details class="appendix-item" id="snippet-2-unlock-answers-contract-reading">
+<summary>Snippet 2: Unlock answers — contract reading</summary>
+<div class="appendix-body">
+<ol><li>No — <code>input_schema.properties.*.description</code> strings are never read by any TypeScript in this project. They exist solely for the model: sent verbatim inside <code>tools: TOOLS</code> on every <code>callModel</code> call (lecture 05), read by the model when it decides how to fill in a tool call's arguments. <code>runTool</code> only ever reads the <em>values</em> the model actually sent (<code>input.path</code>), never the schema text describing what that field means.</li><li>Yes, <code>{}</code> is valid for <code>list_files</code> since <code>required: []</code>. <code>runTool</code>'s <code>list_files</code> case must handle <code>input.path === undefined</code> by substituting <code>&quot;.&quot;</code>, or it violates the schema's own promised default. This is exactly what the <code>&quot;defaults to &#x27;.&#x27;&quot;</code> test in <code>tests/02_read_only_tools.test.ts</code> checks.</li></ol>
+</div>
+</details>
+<details class="appendix-item" id="snippet-3-dispatch-skeleton--read_file">
+<summary>Snippet 3: Dispatch skeleton + <code>read_file</code></summary>
+<div class="appendix-body">
+<pre><code class="language-ts">export function runTool(name: string, input: any): string {
+  switch (name) {
+    case "read_file":
+      return fs.readFileSync(input.path, "utf8");
+
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
+}</code></pre>
+</div>
+</details>
+<details class="appendix-item" id="snippet-3-dispatch-skeleton--read_file-unlock">
+<summary>Snippet 3: Dispatch skeleton + <code>read_file</code> &mdash; unlock answers</summary>
+<div class="appendix-body">
+<ol><li><code>runTool</code>'s contract is "return a string, or throw." There is no third option for "something went wrong but I'll still return a string" — that would force every caller to inspect the returned string to guess whether it's real content or an error message, which is exactly the ambiguity a thrown exception avoids. Section 5 formalizes this: letting the exception propagate is the <em>entire</em> convention, not a shortcut you're taking because catching is hard.</li><li><code>fs.readFileSync(undefined, &quot;utf8&quot;)</code> throws a <code>TypeError</code> at runtime (Node's <code>fs</code> module expects its first argument to be a string, <code>Buffer</code>, URL, or file descriptor — <code>undefined</code> satisfies none of those). TypeScript's <code>input: any</code> means this isn't caught at compile time; it surfaces only when the code actually runs, which is precisely why the tests exist — to catch what the type system, by design, opted out of catching here.</li></ol>
+</div>
+</details>
+<details class="appendix-item" id="snippet-4-list_files-case--full-runtool-so-far">
+<summary>Snippet 4: <code>list_files</code> case + full <code>runTool</code> so far</summary>
+<div class="appendix-body">
+<pre><code class="language-ts">export function runTool(name: string, input: any): string {
+  switch (name) {
+    case "read_file":
+      return fs.readFileSync(input.path, "utf8");
+
+    case "list_files": {
+      const dir = input.path ?? ".";
+      return fs
+        .readdirSync(dir, { withFileTypes: true })
+        .map((e) =&gt; (e.isDirectory() ? e.name + "/" : e.name))
+        .join("\n");
+    }
+
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
+}</code></pre>
+<p>(<code>write_file</code>, <code>edit_file</code>, <code>bash</code> cases are added into this exact <code>switch</code> in lecture 03 — nothing above changes when they arrive.)</p>
+</div>
+</details>
+<details class="appendix-item" id="snippet-4-list_files-case--full-runtool-so-far-unlock">
+<summary>Snippet 4: <code>list_files</code> case + full <code>runTool</code> so far &mdash; unlock answers</summary>
+<div class="appendix-body">
+<ol><li>A bare filename string can't distinguish a file named <code>sub</code> from a directory named <code>sub</code> — the name alone carries no type information. <code>Dirent.isDirectory()</code> calls back into the OS's directory-entry metadata (already fetched by <code>readdirSync</code> when you pass <code>withFileTypes: true</code>) to answer that question without a second filesystem call per entry.</li><li>Nowhere in <code>runTool</code>, and nowhere in lecture 02 at all. It's <code>agentLoop</code> (lecture 05): the model receives <code>&quot;sub/&quot;</code> as part of <code>list_files</code>'s result, and if it wants to look inside <code>sub</code>, it issues a brand-new <code>tool_use</code> block requesting <code>list_files</code> again with <code>path: &quot;sub&quot;</code> on its <em>next</em> turn — the same "the model recurses by calling again" pattern from lecture 01's trace, just with <code>list_files</code> instead of <code>read_file</code>/<code>edit_file</code>.</li><li>No, not for any input the model can realistically send. <code>path</code>'s schema type is <code>string</code>, and the only "falsy for <code>||</code> but not for <code>??</code>" case here is an explicit empty string <code>&quot;&quot;</code> — which the model would only send if it deliberately meant "list the empty-string path," an edge case neither operator changes in a way that matters for this course's tests or fixture. They diverge in general (<code>0</code>, <code>false</code>, <code>&quot;&quot;</code> vs. only <code>null</code>/<code>undefined</code>), but <code>path</code> never carries <code>0</code> or <code>false</code>, so the two are interchangeable <em>here</em> — <code>??</code> is simply the more precise tool for "was this omitted," and worth defaulting to as a habit.</li></ol>
+</div>
+</details>
+<details class="appendix-item" id="snippet-5-tracing-an-error-forward-to-lecture-05">
+<summary>Snippet 5: Tracing an error forward to lecture 05</summary>
+<div class="appendix-body">
+<p>If <code>runTool(&quot;read_file&quot;, { path: &quot;nope.txt&quot; })</code> throws <code>Error: ENOENT: no such file or directory, open &#x27;nope.txt&#x27;</code>, lecture 05's <code>agentLoop</code> catches it and pushes:</p>
+<pre><code class="language-ts">{ type: "tool_result", tool_use_id: "toolu_...", content: "ENOENT: no such file or directory, open 'nope.txt'", is_error: true }</code></pre>
+<p><code>content</code> is <code>err.message</code>, untouched — the same string Node itself produced, now readable by the model as its next turn's input. Nothing about today's <code>read_file</code> case changes to make this work later; it works <em>because</em> you let the exception propagate instead of catching it.</p>
+</div>
+</details>
+<hr>
+<p><em>End of lecture.</em></p>
+<hr class="end-rule">
+<nav class="pagenav"><a href="index.html">&uarr; Course home</a> <span class="dot">&middot;</span> <a href="01_the_shape_of_an_agent.html">&larr; Previous lecture</a> <span class="dot">&middot;</span> <a href="03_mutating_tools.html">Next lecture &rarr;</a></nav>
+</main>
+</body>
+</html>

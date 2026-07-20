@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Code Nano — a CS61A-style guided project</title>
+<meta name="description" content="Build your own Claude Code: a working ~350-line agent in TypeScript, problem by problem, against a read-only test harness.">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner"><span class="brand"><a href="index.html">Claude Code Nano</a></span><span class="crumbs"><a href="#lectures">Lectures</a> <span class="dot">&middot;</span> <a href="#start">Get started</a></span></div></nav>
+<main class="handout">
+
+<h1>Claude Code Nano</h1>
+<p class="lede"><strong>Build your own Claude Code.</strong> A CS61A-style guided project: you implement a working ~350-line agent in TypeScript &mdash; the same core loop the real Claude Code runs &mdash; problem by problem, against a provided read-only test harness. Modeled on <a href="https://cs61a.org/proj/hog/">Hog</a>.</p>
+
+<p>There is no planner, no graph, no framework hiding the trick. An agent is <em>a model that can ask for things, plus a harness that runs them and reports back</em>, looped until the model stops asking. Six lectures, one file (<code>index.ts</code>), five sections, ten points. By the end you run your own agent against a real API and watch it find and fix a planted bug in a JavaScript file.</p>
+
+<h2 id="who">Who this is for</h2>
+<p>A programmer who thinks in <strong>data structures &amp; algorithms first</strong> (arrays, queues, invariants, state machines) and <strong>games &amp; simulations second</strong> (turn loops, game state, player moves). Fluent in programming but newer to <strong>TypeScript / Node specifically</strong>: <code>async</code>/<code>await</code>, promises, and Node APIs (<code>fs</code>, <code>child_process</code>, <code>readline</code>) are explained as they appear. Every abstract agent concept is anchored to a DSA idea &mdash; the conversation is an append-only array; the agent loop is a while-loop over a work queue; the edit tool&rsquo;s uniqueness rule is an invariant check.</p>
+
+<h2 id="objectives">What you&rsquo;ll be able to do</h2>
+<ul>
+  <li>Explain and implement the <strong>agent loop</strong> from memory: call model &rarr; execute <code>tool_use</code> requests &rarr; append <code>tool_result</code>s &rarr; repeat until no tool calls.</li>
+  <li>Implement the <strong>5 core tools</strong> (read / list / write / edit / bash) and explain why edits use unique-string replacement.</li>
+  <li>Explain how <strong>permissions, denials, and tool errors</strong> flow back to the model as ordinary messages &mdash; and watch a model self-correct.</li>
+  <li>Run your own agent end-to-end: it finds and fixes a planted bug in <code>fixtures/convert.js</code>.</li>
+  <li>Read real Claude Code / agent-harness discussions and know exactly what the harness is doing.</li>
+</ul>
+
+<h2 id="lectures">The six lectures</h2>
+<p>The course builds one file in dependency order. Each lecture fills exactly one region of <code>index.ts</code>, using the identifiers already declared in the skeleton. <code>index.ts</code> is the only editable file; <code>tests/</code>, <code>fixtures/</code>, and <code>solution/</code> are read-only harness.</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>#</th><th>Lecture</th><th>Builds</th><th>Points</th></tr></thead>
+<tbody>
+<tr><td>01</td><td><a href="01_the_shape_of_an_agent.html">The Shape of an Agent</a></td><td>The whole spec, hand-traced; environment; Problem&nbsp;0 warm-up</td><td>1</td></tr>
+<tr><td>02</td><td><a href="02_read_only_tools.html">Tools I: Eyes</a></td><td><code>runTool</code> dispatch for <code>read_file</code>, <code>list_files</code></td><td>2</td></tr>
+<tr><td>03</td><td><a href="03_mutating_tools.html">Tools II: Hands</a></td><td><code>write_file</code>, <code>edit_file</code> (the uniqueness invariant), <code>bash</code></td><td>2</td></tr>
+<tr><td>04</td><td><a href="04_the_permission_gate.html">The Permission Gate</a></td><td><code>preview</code> + <code>confirm</code>; async/await for real</td><td>1.5</td></tr>
+<tr><td>05</td><td><a href="05_the_agent_loop.html">The Agent Loop</a></td><td><code>callModel</code> + <code>agentLoop</code> &mdash; the boss level</td><td>2.5</td></tr>
+<tr><td>06</td><td><a href="06_the_repl_and_endgame.html">The REPL and the Endgame</a></td><td><code>main()</code> REPL, crash recovery, live acceptance run</td><td>1</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="points">Points (61A-style, 10 total)</h2>
+<p>Self-graded &mdash; points exist for pacing and the 61A homage, not stakes. Each lecture is earned by its <code>./ok NN</code> suite going green plus checking your unlock-question answers against the appendix (spoilers, collapsed by default, on each lecture page).</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>Lecture</th><th>Points</th><th>Earned by</th></tr></thead>
+<tbody>
+<tr><td>01</td><td>1</td><td>Problem&nbsp;0 green (<code>./ok 00</code>) + unlock answers</td></tr>
+<tr><td>02</td><td>2</td><td><code>./ok 02</code> green + unlocks</td></tr>
+<tr><td>03</td><td>2</td><td><code>./ok 03</code> green + unlocks &mdash; <strong>checkpoint: all five tools done</strong></td></tr>
+<tr><td>04</td><td>1.5</td><td><code>./ok 04</code> green + unlocks</td></tr>
+<tr><td>05</td><td>2.5</td><td><code>./ok 05</code> green + unlocks (the boss level)</td></tr>
+<tr><td>06</td><td>1</td><td><code>./ok 06</code> green + unlocks; the live fixture-bug run is the payoff</td></tr>
+<tr><td>Extra</td><td>0</td><td><code>NANO.md</code> / <code>/context</code> viz / <code>task</code> subagent &mdash; bragging rights</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="start">Getting the starter files</h2>
+<p>Download <a href="starter.zip"><strong>starter.zip</strong></a> and unpack it. It contains the skeleton <code>index.ts</code> (fully-typed signatures with <code>YOUR CODE HERE</code> stubs), the read-only test harness (<code>tests/</code>, <code>fixtures/</code>), the <code>ok</code> runner, and the Node project files. It does <em>not</em> contain the reference solution &mdash; the appendix snippets on each lecture page are the only answer key.</p>
+
+<p>First run:</p>
+<pre><code class="language-bash">unzip starter.zip
+cd claude-code-nano
+npm install
+./ok 00</code></pre>
+
+<p>Expect <code>./ok 00</code> to <strong>fail</strong> on one test:</p>
+<pre><code>× Problem 0: warmup() must return 61001 (fix the off-by-two in index.ts)
+AssertionError: expected 60999 to be 61001</code></pre>
+
+<blockquote class="callout hint"><p>That failure is the shipped, pre-course state &mdash; it&rsquo;s <strong>Problem&nbsp;0</strong> in <a href="01_the_shape_of_an_agent.html">Lecture&nbsp;01</a>. The other two setup tests (Node version, importing <code>index.ts</code> doesn&rsquo;t crash) already pass. Fixing <code>warmup()</code> so <code>./ok 00</code> goes green confirms your toolchain works end to end, and you&rsquo;re off.</p></blockquote>
+
+<p>No API key is needed for any <code>./ok</code> run &mdash; every test scripts a fake model, so the whole suite runs offline and free. You only need an <code>ANTHROPIC_API_KEY</code> once, for Lecture&nbsp;06&rsquo;s live acceptance run.</p>
+
+<hr class="end-rule">
+<nav class="pagenav"><a href="01_the_shape_of_an_agent.html">Start with Lecture 01 &rarr;</a></nav>
+</main>
+</body>
+</html>

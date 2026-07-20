@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Shape of an Agent &mdash; Claude Code Nano</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<nav class="topbar"><div class="topbar-inner"><span class="brand"><a href="index.html">Claude Code Nano</a></span><span class="crumbs"><a href="index.html">Home</a> <span class="dot">&middot;</span> <a href="02_read_only_tools.html">Next &rarr;</a></span></div></nav>
+<main class="handout">
+<h1 id="the-shape-of-an-agent">The Shape of an Agent</h1>
+<h2 id="a-cs61a-style-lecture-for-builders-of-turn-based-simulators-learning-how-claude-code-works">A CS61A-Style Lecture for Builders of Turn-Based Simulators, Learning How Claude Code Works</h2>
+<hr>
+<h2 id="lecture-overview">Lecture Overview</h2>
+<p>You've written game loops before — deal a hand, wait for a player action, resolve it, check win conditions, repeat. You've written state machines and append-only logs. You know that a queue is just "things I still owe processing to." This lecture asks you to look at Claude Code through that exact lens, because that's all it is: <strong>an append-only array of messages, and a while-loop that keeps a model and a set of functions talking to each other until the model stops asking for help.</strong></p>
+<p>There is no planner. No graph. No hidden reasoning engine bolted on top. The "intelligence" is entirely inside the model; everything you build in this course is the harness that gives that model <strong>hands</strong> — the ability to read files, write files, and run shell commands on your actual machine, instead of just producing text nobody acts on.</p>
+<p>By the end of this course (six lectures, one file: <code>index.ts</code>) you will have built a working ~350-line clone of Claude Code from scratch, and you'll be able to run it for real against a planted bug in a JavaScript file. This lecture builds none of that code. Its job is different, and it's the same job CS61A's Hog handout does before Problem 0 ever asks you to write a die-rolling function: <strong>explain every rule of the game before you're handed a controller.</strong> You cannot correctly implement <code>agentLoop()</code> in lecture 05 if you don't already understand, cold, what a <code>tool_use</code> block is and why a tool's result gets sent back as a <code>&quot;user&quot;</code> message. So today: no code you'll keep, one warm-up bug fix, and a lot of staring at a real conversation transcript until its shape is obvious.</p>
+<p><strong>What this lecture builds toward</strong> (the whole course, so you can see the shape of where you're headed):</p>
+<div class="table-wrap"><table><thead><tr><th>Section of <code>index.ts</code></th><th>What it does</th><th>Built in</th></tr></thead><tbody><tr><td>1. <code>TOOLS</code> + <code>runTool</code></td><td>Schemas describing 5 functions to the model, and the functions themselves</td><td>Lectures 02–03</td></tr><tr><td>2. <code>GATED</code> + <code>preview</code> + <code>confirm</code></td><td>y/n gate before destructive actions</td><td>Lecture 04</td></tr><tr><td>3. <code>callModel</code></td><td>The one function that talks to the Anthropic API</td><td>Lecture 05</td></tr><tr><td>4. <code>agentLoop</code></td><td>The loop: call model → run tools → repeat</td><td>Lecture 05 (boss level)</td></tr><tr><td>5. <code>main</code></td><td>The readline REPL that drives it all</td><td>Lecture 06</td></tr></tbody></table></div>
+<p>Today you'll read all five sections of the skeleton without writing most of them — only one two-character bug fix, <code>warmup()</code>, is fair game right now.</p>
+<p><strong>How this lecture works:</strong> Every section below ends with a <strong>Checkpoint</strong> and a pointer into the <strong>Appendix</strong> at the bottom. Try to answer the section's task — often "predict what happens," not "write code," since this lecture is almost entirely conceptual — <em>before</em> you look. The one exception is Problem 0 at the end, which is real code: a single planted bug, checked by running <code>./ok 00</code>. This lecture is worth <strong>1 of the course's 10 points</strong> — see the points table in curriculum.md — earned by Problem 0 passing plus getting the six unlock questions right against the answer key.</p>
+<hr>
+<h2 id="1-what-is-an-agent">1. What Is an Agent?</h2>
+<h3 id="concept">Concept</h3>
+<p>Strip away the marketing and an "agent" is two things wired together:</p>
+<ol><li><strong>A model that can ask for things.</strong> Instead of only returning text, the model can return a request shaped like a function call: "call <code>read_file</code> with <code>path: &quot;foo.js&quot;</code>." It doesn't know what <code>read_file</code> <em>does</em> — it only knows the name and the shape of the arguments, from a schema you gave it. This is your familiar <strong>interface</strong>: a name, a signature, and a contract, with no implementation attached.</li><li><strong>A harness that actually runs things.</strong> Something on the <em>your</em> side of the wire reads that request, executes the real function (opens the real file, on the real disk), and reports back what happened. The model never touches your filesystem directly — it only ever sees text you choose to show it.</li></ol>
+<p>Loop those two together — model asks, harness runs, harness reports back, model asks again — and you have an agent. That loop is the entire "trick." Everything else in this course (tool schemas, the permission gate, error handling) is detail <em>around</em> that loop, not a replacement for it.</p>
+<p>Put in game terms, since you've built these before: it's a <strong>turn-based match</strong> between two players, model and harness. The model's move is "I'd like to call these tools." The harness's move is "here's what happened when I did." Neither player can skip their turn arbitrarily — the model can't touch the disk, and the harness can't invent what the model would say next. Play continues until the model makes a move with no tool calls in it — that's resignation, i.e. "I'm done, here's my final answer."</p>
+<h3 id="why-it-matters">Why It Matters</h3>
+<p>If you've only used Claude Code as an end user, its behavior can feel like it's "thinking" in some deep, opaque way about your codebase — planning multi-step refactors, deciding what to check next. It isn't planning in any special sense. It's calling a model repeatedly, feeding back whatever the model most recently asked to see. Every "decision" you observe (read this file, then that one, then edit this line) is the model choosing its next move given everything that's happened so far — the same way a chess engine's next move depends on the board state, not on some separate planning subsystem bolted outside the loop.</p>
+<p>Understanding this precisely is what lets you debug a real agent later: if it does something wrong, the bug is in one of exactly three places — the tool's <em>description</em> (the model misunderstood the contract), the tool's <em>implementation</em> (<code>runTool</code> did the wrong thing), or the <em>loop</em> (results weren't fed back correctly). There is no fourth place to look.</p>
+<h3 id="your-task">Your Task</h3>
+<p>No code yet. Answer this before reading on: <strong>A model, on its own, decides to call <code>bash</code> with <code>{&quot;command&quot;: &quot;rm -rf fixtures/&quot;}</code>. What happens to your filesystem right now, at the instant the model produces that request?</strong></p>
+<p>Think about it in terms of the two-part definition above before you check the Checkpoint.</p>
+<h3 id="checkpoint">Checkpoint</h3>
+<p>Nothing happens yet. The model <em>asking</em> for a tool call is just text in a structured shape — it is inert until something on the harness side chooses to execute it. This is exactly why lecture 04 exists: the harness gets to look at that request, show it to a human, and refuse. The model proposes; the harness (you, or your permission gate) disposes.</p>
+<p><em>Stuck? See <a href="#snippet-1-the-two-part-definition">Snippet 1</a> in the Appendix.</em></p>
+<hr>
+<h2 id="2-the-message-protocol-as-a-data-structure">2. The Message Protocol as a Data Structure</h2>
+<h3 id="concept-1">Concept</h3>
+<p>Everything the model has ever seen or said lives in one value: <code>messages</code>, a <code>Anthropic.MessageParam[]</code> — an array. Not a tree, not a graph with branches — a flat, <strong>append-only array</strong>, exactly like a log file or an event-sourced history you'd design for a game replay. Every turn appends one or more entries. Nothing is ever edited or removed in place (lecture 06's crash recovery <em>pops</em> a bad entry off the end — even the one exception is a stack operation, not a mutation).</p>
+<p>Each entry (<code>MessageParam</code>) has two fields:</p>
+<pre><code class="language-ts">{ role: "user" | "assistant", content: string | ContentBlockParam[] }</code></pre>
+<p>(the <code>|</code> means "either/or" — e.g. <code>role</code> is either <code>&quot;user&quot;</code> or <code>&quot;assistant&quot;</code>, and <code>content</code> is either a plain string or an array of blocks)</p>
+<p>Only two roles exist. <code>&quot;user&quot;</code> means "the harness said this" (your typed input, <em>or</em> a tool's result — more on that below). <code>&quot;assistant&quot;</code> means "the model said this." There's no third role for "the tool" or "the system" mid-conversation — the system prompt is passed separately, once, outside this array entirely (you'll see <code>SYSTEM_PROMPT</code> passed as its own argument in <code>callModel</code>, not woven into <code>messages</code>).</p>
+<p><code>content</code> is usually not a plain string once tools are involved — it's an array of <strong>content blocks</strong>, and a single turn can mix several:</p>
+<ul><li><code>{ type: &quot;text&quot;, text: &quot;...&quot; }</code> — the model talking to the human.</li><li><code>{ type: &quot;tool_use&quot;, id: &quot;toolu_01A...&quot;, name: &quot;read_file&quot;, input: { path: &quot;foo.js&quot; } }</code> — the model asking the harness to run something. Note it has an <code>id</code> — a unique tag for <em>this specific request</em>, generated by the model/API, not by you.</li><li><code>{ type: &quot;tool_result&quot;, tool_use_id: &quot;toolu_01A...&quot;, content: &quot;...&quot;, is_error: false }</code> — the harness's answer to one specific <code>tool_use</code>, tagged by matching <code>tool_use_id</code> back to the request's <code>id</code>.</li></ul>
+<p>That <code>id</code> / <code>tool_use_id</code> pairing is not cosmetic. If the model asks for three tools in one turn, you owe it three separate <code>tool_result</code> blocks, each carrying the matching <code>tool_use_id</code> — otherwise the model has no way to know which result answers which question, the same way you'd need a request ID to match async responses to their callers in any request/response system.</p>
+<h3 id="why-it-matters-1">Why It Matters</h3>
+<p>This one fact — messages is a flat array, tool results ride back in as a <code>&quot;user&quot;</code> message — resolves almost every "wait, why is it shaped like <em>that</em>" moment you'll have while implementing <code>agentLoop</code> in lecture 05. It's easy to instinctively want a <code>&quot;tool&quot;</code> role, or to want to mutate a previous assistant message once its tool call resolves. Both instincts are wrong for this API, and both would break the model's ability to reconstruct what happened, because the model re-reads the <em>entire</em> array from scratch on every single call — it has no memory between calls except what's in <code>messages</code>. If you silently dropped or edited an entry, the model would be reasoning from a version of history that never happened.</p>
+<p>This also explains why the harness, not the model, decides when the conversation is "done": the loop's termination condition is purely structural — <em>does the most recent assistant turn contain any <code>tool_use</code> blocks?</em> — not a signal the model has to explicitly emit.</p>
+<h3 id="your-task-1">Your Task</h3>
+<p>Predict, don't write code: given the two-content-block example above (a <code>tool_use</code> for <code>read_file</code> sitting alongside <code>text</code>), if the harness runs that tool and gets back the string <code>&quot;function foo() {...}&quot;</code>, what does the <em>next</em> entry appended to <code>messages</code> look like — role and content shape, not full JSON?</p>
+<h3 id="checkpoint-1">Checkpoint</h3>
+<p>It's <code>{ role: &quot;user&quot;, content: [{ type: &quot;tool_result&quot;, tool_use_id: &quot;toolu_01A...&quot;, content: &quot;function foo() {...}&quot;, is_error: false }] }</code>. If your answer said <code>role: &quot;tool&quot;</code> or put the result directly as a bare string for <code>content</code>, re-read the block shapes above — this is the single most common first-guess mistake, and section 6's unlock questions will test it again.</p>
+<blockquote class="callout warn"><strong>Common mistake:</strong> conflating "the tool ran" with "the model knows the tool ran." The model only knows what's in <code>messages</code> the <em>next</em> time you call it. Running <code>runTool()</code> and never pushing its result is a silent bug — the model will just repeat the same request forever, because as far as it can tell, it never got an answer.</blockquote>
+<p><em>Stuck? See <a href="#snippet-2-message-shapes">Snippet 2</a> in the Appendix.</em></p>
+<hr>
+<h2 id="3-a-full-trace-watching-nano-fix-a-bug">3. A Full Trace: Watching Nano Fix a Bug</h2>
+<h3 id="concept-2">Concept</h3>
+<p>This is the centerpiece of the lecture. Below is a complete, real conversation — the kind <code>agentLoop</code> will drive once you've built it — annotated line by line. The scenario: <code>fixtures/convert.js</code> (a file already sitting in this repo, which you'll use for real in lecture 06) has a bug — Celsius-to-Fahrenheit is computed with the fraction flipped:</p>
+<pre><code class="language-js">function celsiusToFahrenheit(c) {
+  return (c * 5) / 9 + 32; // BUG: should be (c * 9) / 5 + 32
+}</code></pre>
+<p>We type: <strong>"There's a bug in fixtures/convert.js — the temperature conversion looks wrong. Can you find and fix it?"</strong></p>
+<p>Here is the entire <code>messages</code> array's evolution, one push at a time. <code>callModel(messages)</code> is called three times total; each call sees the <em>entire</em> array built so far.</p>
+<pre><code>messages = []                                         // REPL starts, empty log
+
+──── We type our request; REPL pushes it ────
+messages[0] = {
+  role: "user",
+  content: "There's a bug in fixtures/convert.js — the temperature
+             conversion looks wrong. Can you find and fix it?"
+}
+
+──── callModel(messages) call #1 — model sees just [0] ────
+response.content = [
+  { type: "text", text: "I'll take a look." },
+  { type: "tool_use", id: "toolu_01A", name: "read_file",
+    input: { path: "fixtures/convert.js" } }
+]
+messages[1] = { role: "assistant", content: response.content }  // pushed VERBATIM
+
+──── Harness executes the tool_use from [1] ────
+runTool("read_file", { path: "fixtures/convert.js" })
+  → "function celsiusToFahrenheit(c) {\n  return (c * 5) / 9 + 32; ...}"
+  (read_file is NOT gated — no y/n needed, it can't change anything)
+
+messages[2] = {
+  role: "user",
+  content: [{ type: "tool_result", tool_use_id: "toolu_01A",
+              content: "function celsiusToFahrenheit(c) {...}",
+              is_error: false }]
+}
+
+──── callModel(messages) call #2 — model sees [0, 1, 2] ────
+response.content = [
+  { type: "text", text: "Found it — the formula multiplies by 5/9
+                          instead of 9/5. Fixing." },
+  { type: "tool_use", id: "toolu_01B", name: "edit_file",
+    input: { path: "fixtures/convert.js",
+              old_string: "return (c * 5) / 9 + 32;",
+              new_string: "return (c * 9) / 5 + 32;" } }
+]
+messages[3] = { role: "assistant", content: response.content }
+
+──── Harness executes the tool_use from [3] ────
+edit_file IS gated (lecture 04) — confirm() prints a preview and waits.
+We type "y". runTool(...) applies the edit, returns "Edited fixtures/convert.js"
+
+messages[4] = {
+  role: "user",
+  content: [{ type: "tool_result", tool_use_id: "toolu_01B",
+              content: "Edited fixtures/convert.js", is_error: false }]
+}
+
+──── callModel(messages) call #3 — model sees [0, 1, 2, 3, 4] ────
+response.content = [
+  { type: "text", text: "Fixed — celsiusToFahrenheit now multiplies
+                          by 9/5 before adding 32." }
+]
+messages[5] = { role: "assistant", content: response.content }
+
+──── No tool_use blocks in [5] → loop returns. Control back to REPL. ────</code></pre>
+<p>Six entries. Three round trips to the model. One human "y". Nothing about this is more complicated than that — every real Claude Code session, however long, is this same pattern run many more times.</p>
+<h3 id="why-it-matters-2">Why It Matters</h3>
+<p>Notice what the model <em>never</em> sees: your filesystem, the exit code convention of <code>edit_file</code>, whether the y/n prompt happened. It only ever sees the six entries above, as text. Every capability the model appears to have — "it read the file," "it understood the bug," "it fixed it" — is entirely mediated by what the harness chooses to put into <code>messages[2]</code> and <code>messages[4]</code>. Get the <em>content</em> of a <code>tool_result</code> wrong (truncate it, garble it, forget to include the error) and the model's next move gets worse, with no other cause. This is the leverage point you'll be implementing across lectures 02–05: the loop's shape is fixed and small; almost all of the engineering is <em>what string does <code>runTool</code> return</em>.</p>
+<h3 id="your-task--unlock-questions">Your Task — Unlock Questions</h3>
+<p>Six questions on the trace above. Write down your answers before checking the Appendix — these are graded by comparison against the answer key, not by <code>./ok</code>.</p>
+<ol><li>How many entries are in <code>messages</code> at the exact moment <code>callModel</code> is invoked for the <strong>second</strong> time (right before that call, not after)?</li><li><code>messages[2]</code> and <code>messages[4]</code> both have <code>role: &quot;user&quot;</code> — but neither one is something a human typed. What is the rule for which role a message gets: is it "who is speaking," or something else?</li><li><code>messages[1].content[1].id</code> is <code>&quot;toolu_01A&quot;</code>. What later entry references that exact string, and under what field name?</li><li>Suppose <code>runTool(&quot;edit_file&quot;, ...)</code> had thrown an error instead of succeeding (say, <code>old_string</code> matched zero times). Based on what you know about tool_result blocks having an <code>is_error</code> field, what would <code>messages[4]</code> most plausibly contain instead, and would the loop stop or continue?</li><li><code>messages[1]</code> contains <strong>both</strong> a <code>text</code> block and a <code>tool_use</code> block in the same array. Is that a special case, or does it follow directly from <code>content</code> being defined as <code>ContentBlockParam[]</code>?</li><li>If you deleted <code>messages[2]</code> before call #2 — i.e. the model's <code>tool_use</code> request in <code>messages[1]</code> never got an answer — what would you expect <code>callModel</code> call #2 to do: proceed normally, hang, or have the API reject the request?</li></ol>
+<h3 id="checkpoint-2">Checkpoint</h3>
+<p>You should be able to answer all six from the transcript alone, with no outside knowledge. If any felt like a guess, re-read section 2 — every one of these questions is testing a claim made there.</p>
+<p><em>Stuck? See <a href="#snippet-3-unlock-question-answers">Snippet 3</a> in the Appendix.</em></p>
+<hr>
+<h2 id="4-tour-of-the-skeleton">4. Tour of the Skeleton</h2>
+<h3 id="concept-3">Concept</h3>
+<p>Open <code>index.ts</code>. It's ~230 lines, and its own header comment already tells you the shape:</p>
+<pre><code>1. TOOLS   — 5 plain functions + JSON Schemas describing them to the model
+2. GATE    — y/n confirmation before destructive tools
+3. MODEL   — one callModel() hiding the backend
+4. LOOP    — the agent loop (the whole trick)
+5. REPL    — a plain readline prompt</code></pre>
+<p>That ordering isn't arbitrary — it's the dependency order. <code>GATE</code> is used by <code>LOOP</code>; <code>MODEL</code> is called by <code>LOOP</code>; <code>LOOP</code> is driven by <code>REPL</code>. Each later section only makes sense once the one above it exists, which is also the order this course builds them in (lectures 02–03 → 04 → 05 → 06).</p>
+<p>Right now, almost every function body is a one-liner: <code>throw new Error(&quot;YOUR CODE HERE&quot;)</code>. That's deliberate — the <strong>type signatures, doc comments, and the <code>TOOLS</code> schema array are given</strong>, because reading a contract is the lesson; retyping JSON Schema by hand is not. What's stubbed is the <em>implementation</em> behind each contract.</p>
+<p><code>index.ts</code> is the <strong>only file you ever edit</strong> in this entire course. Everything else — <code>tests/</code>, <code>fixtures/</code>, <code>solution/</code> — is read-only harness, the same way you'd never edit <code>ok</code> itself or the fixture files in a 61A project. <code>solution/index.ts</code> is the finished reference; peeking is allowed, but only <em>after</em> you've tried, or you'll just be transcribing instead of learning the shape.</p>
+<h3 id="why-it-matters-3">Why It Matters</h3>
+<p>You are about to spend five lectures inside a single file. Knowing the section boundaries now means that when lecture 05 says "implement <code>agentLoop</code>," you already know exactly where that function lives, what it's allowed to call (<code>runTool</code>, <code>confirm</code>, <code>callModel</code> — sections 1–3, already built by then), and what calls it (<code>main</code>, not yet built). Skeleton tours matter more here than in a typical multi-file project, precisely <em>because</em> it's one file — there's no directory structure to lean on for orientation.</p>
+<h3 id="your-task-2">Your Task</h3>
+<p>Open <code>index.ts</code> and, for each of the 5 sections, note one thing: is its exported surface (function/type names) fully given, or does the section itself not exist yet? (Trick element: check whether <code>Asker</code> and <code>TOOLS</code> — used by later sections — are already fully written even though the functions that <em>use</em> them aren't.)</p>
+<p>You'll see <code>Asker</code> defined roughly as <code>{ question(prompt: string): Promise&lt;string&gt; }</code> — your first sight of <code>Promise</code> in this course. You'll see Promises/async explained properly in lecture 04 — for now read <code>Promise&lt;string&gt;</code> as "a function that eventually hands back a string."</p>
+<h3 id="checkpoint-3">Checkpoint</h3>
+<p><code>Asker</code> (the type) and <code>TOOLS</code> (the schema array) are both fully written — no stubs. <code>runTool</code>, <code>preview</code>, <code>confirm</code>, <code>callModel</code>, <code>agentLoop</code>, and <code>main</code> are all <code>throw new Error(&quot;YOUR CODE HERE&quot;)</code> bodies behind fully-typed signatures. If you found yourself trying to edit <code>TOOLS</code>'s contents to "fix" something, stop — nothing there is broken; it's the fixed contract every later problem builds against.</p>
+<p><em>Stuck? See <a href="#snippet-4-skeleton-map">Snippet 4</a> in the Appendix.</em></p>
+<hr>
+<h2 id="5-environment-setup">5. Environment Setup</h2>
+<h3 id="concept-4">Concept</h3>
+<p>Two Node/TS-isms worth naming before you touch a terminal:</p>
+<ul><li><strong><code>tsx</code></strong> is a tool that runs <code>.ts</code> files directly — <code>npx tsx index.ts</code> — without a separate compile step. Node itself can't execute TypeScript's type annotations natively; <code>tsx</code> strips/transpiles on the fly, the same way <code>python3 foo.py</code> just runs Python without a "build" phase. You will not touch <code>tsc</code> or any bundler in this course — that's explicitly out of scope (see "What we skipped" below).</li><li><strong><code>vitest</code></strong> is the test runner (think: a faster, TypeScript-native analog of <code>pytest</code>). <code>./ok</code> is a ~10-line bash wrapper around <code>npx vitest run</code> — a direct homage to 61A's <code>python3 ok</code>. <code>./ok 00</code> runs only <code>tests/00_*.test.ts</code>; bare <code>./ok</code> runs everything.</li></ul>
+<h3 id="why-it-matters-4">Why It Matters</h3>
+<p>Every problem in this course, from here through lecture 06, is checked the same way: <code>./ok NN</code>. If <code>npm install</code> or Node itself is broken, <em>nothing</em> downstream works — this is why lecture 01's only machine-checked artifact is "does the environment even run," not "did you write good code." Get this green before worrying about anything else.</p>
+<h3 id="your-task-3">Your Task</h3>
+<p>From the <code>claude-code-nano/</code> directory:</p>
+<pre><code>npm install
+./ok 00</code></pre>
+<p>You should see it <strong>fail</strong> — that failure is expected right now; fixing it is Problem 0, next section. Here's the exact output the skeleton currently produces:</p>
+<pre><code>ok: running tests for problem 00
+
+ RUN  v4.1.10 /Users/jeffrey/Documents/claude_playground/claude-code-nano
+
+ ❯ tests/00_setup.test.ts (3 tests | 1 failed) 5ms
+     × Problem 0: warmup() must return 61001 (fix the off-by-two in index.ts) 3ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/00_setup.test.ts &gt; 00 · environment sanity &gt; Problem 0: warmup() must return 61001 (fix the off-by-two in index.ts)
+AssertionError: expected 60999 to be 61001 // Object.is equality
+
+- Expected
++ Received
+
+- 61001
++ 60999
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 2 passed (3)</code></pre>
+<p>(output trimmed — the real run also prints <code>Start at</code> / <code>Duration</code> trailer lines; ignore those)</p>
+<p>Two of the three tests already pass: Node version (≥ 20 — this environment ships Node 24) and "importing <code>index.ts</code> doesn't crash." Only the <code>warmup()</code> assertion fails. That's the whole job of Problem 0, next.</p>
+<h3 id="checkpoint-4">Checkpoint</h3>
+<p><code>npm install</code> completes with no errors, and <code>./ok 00</code> runs (producing the failure above, not a crash or a "command not found"). If <code>npm install</code> itself errors, stop and fix that before reading further — Problem 0 assumes a working install.</p>
+<p><em>Stuck? See <a href="#snippet-5-setup-notes">Snippet 5</a> in the Appendix.</em></p>
+<hr>
+<h2 id="6-problem-0-fix-the-warm-up-1-pt">6. Problem 0: Fix the Warm-up (1 pt)</h2>
+<h3 id="concept-5">Concept</h3>
+<p>Near the top of <code>index.ts</code>:</p>
+<pre><code class="language-ts">// A tiny warm-up used by lecture 01. Fixing this trivial value is Problem 0 —
+// the "does my environment run at all?" check, 61A's `python3 ok -q 00` moment.
+export function warmup(): number {
+  return 61 * 1000 - 1; // Problem 0: something is off by two...
+}</code></pre>
+<p><code>export function warmup(): number</code> is your first TypeScript-ism worth naming explicitly: <code>export</code> makes the function importable from other files (that's how <code>tests/00_setup.test.ts</code> gets at it — <code>import { warmup } from &quot;../index.ts&quot;</code>), and <code>: number</code> is a <strong>return-type annotation</strong> — a promise to the compiler that this function always hands back a number, checked at compile time rather than discovered at runtime like you'd get away with in plain JS.</p>
+<p>The bug: <code>61 * 1000 - 1</code> evaluates to <code>60999</code>. The test wants <code>61001</code> — <code>61 * 1000 + 1</code>. The comment even tells you it's "off by two": <code>60999</code> to <code>61001</code> is a swing of <code>2</code>, caused by one flipped operator.</p>
+<h3 id="why-it-matters-5">Why It Matters</h3>
+<p>This problem carries zero conceptual weight on its own — it's not testing whether you understand agents. It's testing whether your toolchain works end to end: can you edit <code>index.ts</code>, save it, and have <code>./ok 00</code> pick up the change and go green? Every one of the next five lectures assumes yes. This is the "hello world" of the course, and — like a real hello world — the value isn't the code, it's confirming nothing between you and the test runner is broken.</p>
+<h3 id="your-task-4">Your Task</h3>
+<p>In <code>index.ts</code>, change <code>warmup()</code>'s body so it returns <code>61001</code>. Don't touch anything else in the file — every other stub still legitimately throws, and that's correct for now (later lectures' tests won't even run against those functions yet).</p>
+<blockquote class="callout hint"><strong>Hint:</strong> You need to flip exactly one character (<code>-</code> → <code>+</code>). Resist the urge to hardcode <code>return 61001;</code> — it works and passes the test, but the whole point of <code>61 * 1000 + 1</code> is that it's <em>legible</em> as "61" and "001" mashed together (a wink at the CS61A course number). Prefer the arithmetic form.</blockquote>
+<h3 id="checkpoint-5">Checkpoint</h3>
+<p>Run <code>./ok 00</code> again. Expected output:</p>
+<pre><code>ok: running tests for problem 00
+
+ RUN  v4.1.10 /Users/jeffrey/Documents/claude_playground/claude-code-nano
+
+ Test Files  1 passed (1)
+      Tests  3 passed (3)</code></pre>
+<p>All 3 tests green, 0 failed. That's Problem 0 done, and lecture 01 complete: environment confirmed working, Problem 0 passing, and (if you got them right) six correct unlock answers on the message protocol.</p>
+<p><em>Stuck? See <a href="#snippet-6-warmup-fix">Snippet 6</a> in the Appendix.</em></p>
+<hr>
+<h2 id="key-takeaways">Key Takeaways</h2>
+<ol><li><strong>An agent is a model that can ask, plus a harness that runs and reports back.</strong> The model never touches your machine directly. Every capability you'll ever see it exhibit is mediated by what your <code>runTool</code> returns as a string.</li></ol>
+<ol><li><strong><code>messages</code> is one flat, append-only array — never a tree, never mutated in place.</strong> The model has no memory across calls except what's in this array; it re-reads the whole thing every single time.</li></ol>
+<ol><li><strong>Only two roles exist, and "user" doesn't mean "human."</strong> It means "the harness said this" — which covers both what you typed <em>and</em> every <code>tool_result</code>, because tool results are the harness's turn, just like your typed input is.</li></ol>
+<ol><li><strong><code>tool_use.id</code> and <code>tool_result.tool_use_id</code> must match.</strong> This is the invariant that lets a model ask for several tools in one turn and still know which answer belongs to which question — the same discipline as matching async request IDs to their callers.</li></ol>
+<ol><li><strong>The loop's termination condition is structural, not semantic:</strong> no <code>tool_use</code> blocks in the most recent assistant turn means "done." The model never emits an explicit "I'm finished" signal — you infer it from the shape of its last move.</li></ol>
+<ol><li><strong>This course builds one file, five sections, in dependency order.</strong> <code>TOOLS</code> and <code>GATE</code> before <code>MODEL</code>; <code>MODEL</code> before <code>LOOP</code>; <code>LOOP</code> before <code>REPL</code>. Each lecture fills exactly one section, using the exact identifiers already declared in the skeleton.</li></ol>
+<hr>
+<h2 id="what-we-skipped-for-future-study-or-future-lectures">What we skipped (for future study or future lectures)</h2>
+<ul><li>Streaming responses (the loop here always waits for a complete <code>Message</code> before acting).</li><li>What actually happens inside <code>preview</code> / <code>confirm</code> — that's lecture 04; today you only saw <em>that</em> a gate exists in the trace, not how it's implemented.</li><li>The internals of <code>runTool</code> for each of the 5 tools — lectures 02–03.</li><li>Anything about <code>tsc</code>, bundlers, or TypeScript build tooling — <code>tsx</code> running files directly is all this course uses.</li><li>Multi-step planning, subagents, context compaction — real Claude Code has all of these; this course's whole point is that the <em>core</em> loop needs none of them to work.</li></ul>
+<hr>
+<h2 id="appendix-reference-implementation">Appendix: Reference Implementation</h2>
+<p>Check your work here after attempting each section. Don't read ahead — one snippet at a time.</p>
+<details class="appendix-item" id="snippet-1-the-two-part-definition">
+<summary>Snippet 1: The two-part definition</summary>
+<div class="appendix-body">
+<p>An agent = (1) a model that can emit structured requests (<code>tool_use</code> blocks) instead of only prose, given a schema describing what it's allowed to ask for, plus (2) a harness that reads those requests and decides, on its own authority, whether and how to execute them. The model producing a <code>tool_use</code> block is inert text until the harness's loop (<code>agentLoop</code>, lecture 05) chooses to call <code>runTool</code>. For gated tools (<code>bash</code>, <code>write_file</code>, <code>edit_file</code> — lecture 04's <code>GATED</code> set), that choice runs through a human y/n first. Nothing happens to your filesystem merely because the model "wants" it to.</p>
+</div>
+</details>
+<details class="appendix-item" id="snippet-2-message-shapes">
+<summary>Snippet 2: Message shapes</summary>
+<div class="appendix-body">
+<pre><code class="language-ts">// A plain user turn (what the REPL pushes for your typed input):
+{ role: "user", content: "fix the bug in foo.js" }
+
+// An assistant turn with mixed content — pushed VERBATIM from response.content:
+{
+  role: "assistant",
+  content: [
+    { type: "text", text: "I'll check that file." },
+    { type: "tool_use", id: "toolu_01A", name: "read_file", input: { path: "foo.js" } },
+  ],
+}
+
+// The harness's answer to that tool_use — note role is "user", not "tool":
+{
+  role: "user",
+  content: [
+    { type: "tool_result", tool_use_id: "toolu_01A", content: "...file contents...", is_error: false },
+  ],
+}</code></pre>
+<p>The rule for <code>role</code> is purely "who owns this turn in the protocol," not "who is a human." The harness owns tool results the same way it owns your typed input — both are things the API's <code>&quot;assistant&quot;</code> (the model) did not produce.</p>
+</div>
+</details>
+<details class="appendix-item" id="snippet-3-unlock-question-answers">
+<summary>Snippet 3: Unlock question answers</summary>
+<div class="appendix-body">
+<ol><li><strong>3.</strong> <code>messages</code> = <code>[0]</code> (your request), <code>[1]</code> (assistant + tool_use), <code>[2]</code> (tool_result) — three entries exist right before call #2 fires.</li><li><strong>Which "side of the wire" produced it</strong>, not "was a human typing." <code>role: &quot;user&quot;</code> means "the harness, in the broad sense" — your literal keystrokes and a tool's result are both the harness's turn to speak.</li><li><strong><code>messages[3].content[1].input.old_string</code>? No</strong> — trick to watch for. <code>&quot;toolu_01A&quot;</code> is referenced by <code>messages[2].content[0].tool_use_id</code>, the <code>tool_result</code> answering that specific request. <code>&quot;toolu_01B&quot;</code> (a <em>different</em> id, from the <code>edit_file</code> call in <code>messages[3]</code>) is what <code>messages[4].content[0].tool_use_id</code> matches. Don't confuse the two ids — each <code>tool_use</code> gets its own.</li><li><code>messages[4]</code> would contain a <code>tool_result</code> with <code>is_error: true</code> and <code>content</code> set to the error message string (e.g. <code>&quot;old_string not found in fixtures/convert.js&quot;</code>). The loop does <strong>not</strong> stop — an error is still a result, just an unhappy one; the model sees it on call #3 and can retry with a corrected <code>old_string</code>. This is the self-correction behavior lecture 05's tests specifically script for.</li><li><strong>Follows directly, not a special case.</strong> <code>content</code> is typed as <code>ContentBlockParam[]</code>, an array — nothing restricts it to one block. A single assistant turn commonly narrates in <code>text</code> <em>and</em> requests one or more <code>tool_use</code> calls in the same turn; the loop just iterates every block in <code>response.content</code>.</li><li><strong>The API would reject the request</strong> (a 400-style error) — Anthropic's API requires every <code>tool_use</code> in the prior assistant turn to have a matching <code>tool_result</code> before it will accept the next call. This is exactly the scenario lecture 06's crash-recovery code guards against: if a call fails mid-loop, the last assistant message is "dangling" (has unanswered tool_use blocks), so <code>main()</code> pops it before trying again.</li></ol>
+</div>
+</details>
+<details class="appendix-item" id="snippet-4-skeleton-map">
+<summary>Snippet 4: Skeleton map</summary>
+<div class="appendix-body">
+<pre><code>TOOLS   — Anthropic.Tool[]                         GIVEN, fully written
+runTool — export function runTool(name, input)     STUB  (lectures 02–03)
+GATED   — Set&lt;string&gt;                               GIVEN
+preview — export function preview(name, input)      STUB  (lecture 04)
+confirm — export async function confirm(ask, ...)   STUB  (lecture 04)
+callModel — export async function callModel(...)    STUB  (lecture 05)
+agentLoop — export async function agentLoop(...)     STUB  (lecture 05)
+main    — export async function main()               STUB  (lecture 06)
+
+Asker   — export type Asker = { question(...) }     GIVEN (used by confirm/main)
+warmup  — export function warmup(): number           STUB — YOUR job today</code></pre>
+</div>
+</details>
+<details class="appendix-item" id="snippet-5-setup-notes">
+<summary>Snippet 5: Setup notes</summary>
+<div class="appendix-body">
+<p><code>npm install</code> pulls three runtime deps (<code>@anthropic-ai/sdk</code>, <code>@types/node</code>, <code>tsx</code>) and one dev dep (<code>vitest</code>) — see <code>package.json</code>. No API key is required for anything in this lecture, or for <code>./ok</code> in general: every test file scripts a fake model response instead of calling the real API (that's <em>why</em> <code>callModel</code>'s <code>model</code> parameter in <code>agentLoop</code> is injectable — you'll see this explicitly in lecture 05). You only need <code>ANTHROPIC_API_KEY</code> once, for lecture 06's live acceptance run against the real API.</p>
+</div>
+</details>
+<details class="appendix-item" id="snippet-6-warmup-fix">
+<summary>Snippet 6: Warmup fix</summary>
+<div class="appendix-body">
+<pre><code class="language-ts">export function warmup(): number {
+  return 61 * 1000 + 1; // 61001
+}</code></pre>
+<p>One character changed: <code>-</code> to <code>+</code>. That's the entire diff for Problem 0.</p>
+</div>
+</details>
+<hr>
+<p><em>End of lecture.</em></p>
+<hr class="end-rule">
+<nav class="pagenav"><a href="index.html">&uarr; Course home</a> <span class="dot">&middot;</span> <a href="02_read_only_tools.html">Next lecture &rarr;</a></nav>
+</main>
+</body>
+</html>
